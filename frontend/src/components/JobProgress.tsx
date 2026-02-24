@@ -8,6 +8,7 @@ const STAGE_PROGRESS: Record<string, number> = {
   pending: 5,
   ec2_starting: 25,
   hla_running: 65,
+  pipeline_running: 65,
   done: 100,
 };
 
@@ -15,6 +16,7 @@ const STAGE_LABELS: Record<string, string> = {
   pending: "Queued — waiting for worker…",
   ec2_starting: "Starting compute instance…",
   hla_running: "Running HLA-HD…",
+  pipeline_running: "Running pipeline…",
   done: "Complete",
 };
 

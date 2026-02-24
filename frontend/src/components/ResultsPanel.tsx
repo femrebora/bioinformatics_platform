@@ -11,6 +11,129 @@
 import { useState } from "react";
 import type { Job, JobResult, HLAAllele, VcfVariant } from "../types/job";
 
+// ── DE table detection & Volcano plot ─────────────────────────────────────
+
+function findCol(columns: string[], ...candidates: string[]): string | undefined {
+  const lower = columns.map((c) => c.toLowerCase());
+  for (const cand of candidates) {
+    const idx = lower.indexOf(cand.toLowerCase());
+    if (idx >= 0) return columns[idx];
+  }
+  return undefined;
+}
+
+function isDETable(result: JobResult): boolean {
+  if (!result.columns) return false;
+  const lower = result.columns.map((c) => c.toLowerCase());
+  return (
+    (lower.includes("log2foldchange") || lower.includes("log2fc")) &&
+    (lower.includes("padj") || lower.includes("pvalue") || lower.includes("p.adj") || lower.includes("p.value"))
+  );
+}
+
+function VolcanoPlot({ columns, rows }: { columns: string[]; rows: Record<string, string | number>[] }) {
+  const l2fcCol = findCol(columns, "log2FoldChange", "log2fc", "log2FC");
+  const padjCol = findCol(columns, "padj", "p.adj", "pvalue", "p.value", "pval");
+  const geneCol = findCol(columns, "gene", "gene_id", "geneId", "symbol", "geneName");
+
+  if (!l2fcCol || !padjCol) return null;
+
+  interface Pt { x: number; y: number; sig: "up" | "down" | "ns" }
+  const pts: Pt[] = rows.map((r) => {
+    const x = parseFloat(String(r[l2fcCol] ?? "0"));
+    const pv = parseFloat(String(r[padjCol] ?? "1"));
+    const y = pv > 0 && isFinite(pv) ? -Math.log10(pv) : 0;
+    const sig: Pt["sig"] = Math.abs(x) >= 1 && pv < 0.05 ? (x > 0 ? "up" : "down") : "ns";
+    return { x, y, sig };
+  }).filter((p) => isFinite(p.x) && isFinite(p.y));
+
+  if (pts.length === 0) return null;
+
+  const up   = pts.filter((p) => p.sig === "up").length;
+  const down = pts.filter((p) => p.sig === "down").length;
+  const ns   = pts.length - up - down;
+
+  const W = 320, H = 200, ML = 38, MR = 12, MT = 12, MB = 28;
+  const pw = W - ML - MR, ph = H - MT - MB;
+
+  const xs = pts.map((p) => p.x);
+  const ys = pts.map((p) => p.y);
+  const xMin = Math.min(...xs) - 0.5, xMax = Math.max(...xs) + 0.5;
+  const yMax = Math.max(...ys) + 0.5;
+
+  const toX = (v: number) => ML + ((v - xMin) / (xMax - xMin)) * pw;
+  const toY = (v: number) => MT + (1 - v / yMax) * ph;
+
+  const sigLineY = toY(-Math.log10(0.05));
+  const xTicks: number[] = [];
+  const step = (xMax - xMin) > 8 ? 2 : 1;
+  for (let v = Math.ceil(xMin); v <= Math.floor(xMax); v += step) xTicks.push(v);
+  const yTicks = [0, 2, 4, 6, 8, 10].filter((v) => v <= yMax + 0.1);
+
+  void geneCol; // available for future tooltip use
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <StatCard label="Up-regulated"    value={up.toLocaleString()}   color="#ef4444" />
+        <StatCard label="Down-regulated"  value={down.toLocaleString()} color="#3b82f6" />
+        <StatCard label="Not significant" value={ns.toLocaleString()}   color="#9ca3af" />
+      </div>
+      <SectionTitle>Volcano Plot (log₂FC vs −log₁₀ padj)</SectionTitle>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", maxHeight: 220, display: "block" }}>
+        <rect x={ML} y={MT} width={pw} height={ph} fill="#f9fafb" rx={3} />
+        {/* Threshold lines */}
+        {sigLineY > MT && sigLineY < MT + ph && (
+          <line x1={ML} y1={sigLineY} x2={ML + pw} y2={sigLineY} stroke="#9ca3af" strokeWidth={0.8} strokeDasharray="3,2" />
+        )}
+        {[1, -1].map((fc) => {
+          const x = toX(fc);
+          return x > ML && x < ML + pw
+            ? <line key={fc} x1={x} y1={MT} x2={x} y2={MT + ph} stroke="#9ca3af" strokeWidth={0.8} strokeDasharray="3,2" />
+            : null;
+        })}
+        {/* Points */}
+        {pts.map((p, i) => (
+          <circle
+            key={i}
+            cx={toX(p.x)} cy={toY(p.y)} r={2.2}
+            fill={p.sig === "up" ? "#ef4444" : p.sig === "down" ? "#3b82f6" : "#9ca3af"}
+            fillOpacity={p.sig === "ns" ? 0.3 : 0.7}
+          />
+        ))}
+        {/* Axes */}
+        <line x1={ML} y1={MT + ph} x2={ML + pw} y2={MT + ph} stroke="#374151" strokeWidth={1} />
+        <line x1={ML} y1={MT} x2={ML} y2={MT + ph} stroke="#374151" strokeWidth={1} />
+        {/* X ticks */}
+        {xTicks.map((v) => {
+          const x = toX(v);
+          if (x < ML || x > ML + pw) return null;
+          return (
+            <g key={v}>
+              <line x1={x} y1={MT + ph} x2={x} y2={MT + ph + 3} stroke="#374151" strokeWidth={0.8} />
+              <text x={x} y={MT + ph + 10} textAnchor="middle" fontSize={7} fill="#6b7280">{v}</text>
+            </g>
+          );
+        })}
+        {/* Y ticks */}
+        {yTicks.map((v) => {
+          const y = toY(v);
+          if (y < MT - 1 || y > MT + ph + 1) return null;
+          return (
+            <g key={v}>
+              <line x1={ML - 3} y1={y} x2={ML} y2={y} stroke="#374151" strokeWidth={0.8} />
+              <text x={ML - 5} y={y + 3} textAnchor="end" fontSize={7} fill="#6b7280">{v}</text>
+            </g>
+          );
+        })}
+        {/* Axis labels */}
+        <text x={ML + pw / 2} y={H - 1} textAnchor="middle" fontSize={8} fill="#374151">log₂ Fold Change</text>
+        <text x={10} y={MT + ph / 2} textAnchor="middle" fontSize={8} fill="#374151" transform={`rotate(-90,10,${MT + ph / 2})`}>−log₁₀(padj)</text>
+      </svg>
+    </div>
+  );
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function detectType(result: JobResult): string {
@@ -665,10 +788,26 @@ export function ResultsPanel({ job, isOpen, onClose, onReset }: ResultsPanelProp
               {kind === "vcf" && result.variants && (
                 <VcfSummaryView variants={result.variants} />
               )}
-              {kind === "table" && result.rows && (
+              {kind === "table" && result.rows && result.columns && isDETable(result) ? (
+                <VolcanoPlot columns={result.columns} rows={result.rows} />
+              ) : kind === "table" && result.rows ? (
                 <StatCard label="Result rows" value={result.rows.length.toLocaleString()} color="#3b82f6" />
+              ) : null}
+              {kind === "html_report" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ padding: "12px 14px", background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 8 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#0369a1" }}>HTML Report ready</div>
+                    <div style={{ fontSize: 11, color: "#0284c7", marginTop: 2 }}>Interactive MultiQC report with QC metrics.</div>
+                  </div>
+                  <button onClick={() => setTab("data")} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #bae6fd", background: "#e0f2fe", color: "#0369a1", cursor: "pointer", fontSize: 12, fontWeight: 600, textAlign: "left" as const }}>
+                    View Report →
+                  </button>
+                </div>
               )}
-              {(kind === "html_report" || kind === "text" || kind === "files") && (
+              {kind === "files" && result.files && (
+                <StatCard label="Output files" value={result.files.length.toLocaleString()} color="#8b5cf6" />
+              )}
+              {kind === "text" && (
                 <div style={{ fontSize: 13, color: "#6b7280" }}>Switch to the Data tab to view results.</div>
               )}
             </>
@@ -689,6 +828,26 @@ export function ResultsPanel({ job, isOpen, onClose, onReset }: ResultsPanelProp
                   sandbox="allow-scripts"
                   title="Pipeline report"
                 />
+              )}
+              {kind === "files" && result.files && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {result.files.map((f, i) => (
+                    <div key={i} style={{ padding: "9px 12px", background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 7, display: "flex", gap: 10, alignItems: "center" }}>
+                      <span style={{ fontSize: 16, flexShrink: 0 }}>📄</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                        <div style={{ fontSize: 11, color: "#6b7280", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.path}</div>
+                      </div>
+                      {f.size_bytes !== undefined && (
+                        <div style={{ fontSize: 11, color: "#9ca3af", flexShrink: 0 }}>
+                          {f.size_bytes < 1024 ? `${f.size_bytes} B`
+                            : f.size_bytes < 1048576 ? `${(f.size_bytes / 1024).toFixed(1)} KB`
+                            : `${(f.size_bytes / 1048576).toFixed(1)} MB`}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
               {kind === "text" && result.content && (
                 <pre style={{ background: "#0f172a", color: "#e2e8f0", padding: "18px 20px", borderRadius: 10, fontSize: 11, lineHeight: 1.7, overflowX: "auto", margin: 0 }}>

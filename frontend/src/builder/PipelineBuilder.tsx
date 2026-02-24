@@ -687,6 +687,17 @@ export function PipelineBuilder({
     setEdges((prev) => [...prev, ...newEdges]);
   }
 
+  // Compute pipeline type badge from canvas node types.
+  const pipelineType = useMemo(() => {
+    const types = new Set(nodes.map((n) => n.type));
+    const hasHla = types.has("hlaTyping") || types.has("fastqToBam");
+    const hasNfc = types.has("nfcorePipeline") || types.has("nfcoreModule");
+    if (hasHla && hasNfc) return "Mixed";
+    if (hasHla) return "HLA";
+    if (hasNfc) return "nf-core";
+    return "";
+  }, [nodes]);
+
   // Compute whether InputFileNode already has an uploaded file / dataset ID.
   const inputNodeData = useMemo(() => {
     const n = nodes.find((nd) => nd.type === "inputFile");
@@ -763,6 +774,7 @@ export function PipelineBuilder({
             canRedo={canRedo}
             saving={saving}
             validationErrors={errors}
+            pipelineType={pipelineType}
           />
           <div ref={reactFlowWrapperRef} style={styles.canvas}>
             <ReactFlow

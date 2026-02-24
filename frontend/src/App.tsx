@@ -4,6 +4,7 @@ import { TierConfirm } from "./components/TierConfirm";
 import { JobProgress } from "./components/JobProgress";
 import { ResultViewer } from "./components/ResultViewer";
 import { ResultsPanel } from "./components/ResultsPanel";
+import { JobHistory } from "./components/JobHistory";
 import { PipelineBuilder } from "./builder/PipelineBuilder";
 import { createJob } from "./api/client";
 import { useJobPoller } from "./hooks/useJobPoller";
@@ -17,6 +18,7 @@ type AppState =
   | { phase: "done"; jobId: string }
   | { phase: "error"; message: string }
   | { phase: "builder" }
+  | { phase: "history" }
   | {
       phase: "builder-confirming";
       presign: PresignResponse;
@@ -116,6 +118,7 @@ export default function App() {
 
   const isBuilderPhase =
     state.phase === "builder" || state.phase === "builder-confirming";
+  const isHistoryPhase = state.phase === "history";
 
   const confirmingState =
     state.phase === "builder-confirming"
@@ -148,6 +151,15 @@ export default function App() {
           >
             Quick Run
           </button>
+          <button
+            style={{
+              ...styles.navBtn,
+              ...(isHistoryPhase ? styles.navBtnActive : {}),
+            }}
+            onClick={() => setState({ phase: "history" })}
+          >
+            History
+          </button>
           {job && (job.status === "completed" || job.status === "failed") && (
             <button
               style={{ ...styles.navBtn, background: panelOpen ? "rgba(255,255,255,0.2)" : "#16a34a", borderColor: "#16a34a" }}
@@ -160,7 +172,11 @@ export default function App() {
         </nav>
       </header>
 
-      {isBuilderPhase ? (
+      {isHistoryPhase ? (
+        <main style={styles.main}>
+          <JobHistory />
+        </main>
+      ) : isBuilderPhase ? (
         <PipelineBuilder
           onRunRequested={handleBuilderRunRequested}
           confirmingState={confirmingState}

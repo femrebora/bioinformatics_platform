@@ -4,11 +4,11 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, desc
 
 from app.database import get_db
 from app.models.job import Job
-from app.schemas.job import JobCreate, JobResponse
+from app.schemas.job import JobCreate, JobResponse, JobListResponse
 from app.tasks.pipeline import run_pipeline
 
 router = APIRouter()
@@ -29,9 +29,30 @@ def _serialize_job(job: Job) -> JobResponse:
         tier=job.tier,
         estimated_cost_usd=job.estimated_cost_usd,
         pipeline_id=job.pipeline_id,
+        created_at=job.created_at,
         result=result,
         error=job.error,
     )
+
+
+def _serialize_job_list(job: Job) -> JobListResponse:
+    return JobListResponse(
+        job_id=job.id,
+        status=job.status,
+        stage=job.stage,
+        tier=job.tier,
+        estimated_cost_usd=job.estimated_cost_usd,
+        pipeline_id=job.pipeline_id,
+        created_at=job.created_at,
+    )
+
+
+@router.get("", response_model=list[JobListResponse])
+async def list_jobs(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Job).order_by(desc(Job.created_at)).limit(50)
+    )
+    return [_serialize_job_list(job) for job in result.scalars().all()]
 
 
 @router.post("", response_model=JobResponse, status_code=201)

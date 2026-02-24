@@ -1,5 +1,5 @@
 import axios from "axios";
-import type { Job, PresignResponse, Tier } from "../types/job";
+import type { Job, JobListItem, PresignResponse, Tier } from "../types/job";
 
 const http = axios.create({ baseURL: "/api/v1" });
 
@@ -39,5 +39,10 @@ export async function createJob(
 
 export async function getJob(jobId: string): Promise<Job> {
   const { data } = await http.get<Job>(`/jobs/${jobId}`);
+  return data;
+}
+
+export async function listJobs(): Promise<JobListItem[]> {
+  const { data } = await http.get<JobListItem[]>("/jobs");
   return data;
 }

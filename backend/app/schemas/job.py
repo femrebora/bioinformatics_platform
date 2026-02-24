@@ -83,7 +83,20 @@ class JobResponse(BaseModel):
     tier: str
     estimated_cost_usd: float
     pipeline_id: Optional[str] = None
+    created_at: Optional[datetime] = None
     result: Optional[Any]
     error: Optional[str]
+
+    model_config = {"from_attributes": True}
+
+
+class JobListResponse(BaseModel):
+    job_id: str
+    status: str
+    stage: Optional[str]
+    tier: str
+    estimated_cost_usd: float
+    pipeline_id: Optional[str] = None
+    created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -19,6 +19,7 @@ interface PipelineToolbarProps {
   canRedo:         boolean;
   saving:          boolean;
   validationErrors: string[];
+  pipelineType?:   string;
 }
 
 export function PipelineToolbar({
@@ -40,7 +41,14 @@ export function PipelineToolbar({
   canRedo,
   saving,
   validationErrors,
+  pipelineType,
 }: PipelineToolbarProps) {
+  const badgeColors: Record<string, { bg: string; text: string; border: string }> = {
+    "HLA":     { bg: "#dbeafe", text: "#1d4ed8", border: "#bfdbfe" },
+    "nf-core": { bg: "#dcfce7", text: "#15803d", border: "#bbf7d0" },
+    "Mixed":   { bg: "#fef9c3", text: "#854d0e", border: "#fde68a" },
+  };
+  const badge = pipelineType ? badgeColors[pipelineType] : null;
   return (
     <div style={s.wrapper}>
       <div style={s.toolbar}>
@@ -53,6 +61,12 @@ export function PipelineToolbar({
           placeholder="Pipeline name…"
           style={s.nameInput}
         />
+
+        {badge && (
+          <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: badge.bg, color: badge.text, border: `1px solid ${badge.border}`, flexShrink: 0, whiteSpace: "nowrap" as const }}>
+            {pipelineType}
+          </span>
+        )}
 
         {/* Save / Load / New / Delete */}
         <button onClick={onSave} disabled={saving || !pipelineName.trim()} style={s.btn}>
