@@ -1,0 +1,23 @@
+# Web framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+
+# Async DB
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+
+# Sync DB (Celery worker)
+psycopg2-binary==2.9.10
+
+# Celery
+celery==5.4.0
+redis==5.2.0
+
+# Settings
+pydantic-settings==2.6.1
+python-multipart==0.0.12
+
+# Utils
+httpx==0.28.0
+pyyaml==6.0.2
