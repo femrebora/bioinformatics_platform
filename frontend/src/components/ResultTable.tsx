@@ -23,7 +23,7 @@ export function ResultTable({ job, onReset }: Props) {
           </tr>
         </thead>
         <tbody>
-          {result.hla_alleles.map((row) => (
+          {(result.hla_alleles ?? []).map((row) => (
             <tr key={row.gene} style={styles.tr}>
               <td style={{ ...styles.td, fontWeight: 600 }}>{row.gene}</td>
               <td style={styles.td}>

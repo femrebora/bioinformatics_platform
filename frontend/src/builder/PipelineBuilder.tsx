@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect, useState } from "react";
+import { useRef, useCallback, useEffect, useState, useMemo } from "react";
 import {
   ReactFlow,
   addEdge,
@@ -21,15 +21,20 @@ import { NfCoreModuleNode } from "./nodes/NfCoreModuleNode";
 import { NfCorePipelineNode } from "./nodes/NfCorePipelineNode";
 import { NodePalette } from "./NodePalette";
 import { PipelineToolbar } from "./PipelineToolbar";
+import { Spotlight } from "./Spotlight";
+import { TemplateGallery } from "./TemplateGallery";
 import { validatePipeline, patternsOverlap } from "./validation";
+import { useUndoRedo } from "./useUndoRedo";
+import type { PipelineTemplate } from "./templates";
 import { usePipelines } from "../hooks/usePipelines";
 import { getPipeline } from "../api/pipelineClient";
 import { fetchPipelineModules } from "../api/nfcoreClient";
 import { presignUpload, uploadFile } from "../api/client";
 import type { GraphData } from "../types/pipeline";
-import type { PresignResponse } from "../types/job";
+import type { Job, PresignResponse } from "../types/job";
 import type { TierConfirmProps } from "../components/TierConfirm";
-import type { NfCoreModule } from "../types/nfcore";
+import type { NfCoreModule, NfCorePipeline } from "../types/nfcore";
+import type { InputFileNodeData } from "./nodes/InputFileNode";
 
 // ── Auto-wiring helpers (pure functions, outside component) ───────────────
 
@@ -263,6 +268,8 @@ interface PipelineBuilderProps {
   TierConfirmComponent: React.ComponentType<TierConfirmProps>;
   onConfirm: (tier: import("../types/job").Tier, cost: number) => void;
   onCancelConfirm: () => void;
+  /** Current job from the poller — used to update ResultsNode state. */
+  job?: Job | null;
 }
 
 export function PipelineBuilder({
@@ -271,12 +278,17 @@ export function PipelineBuilder({
   TierConfirmComponent,
   onConfirm,
   onCancelConfirm,
+  job,
 }: PipelineBuilderProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState(DEFAULT_NODES);
   const [edges, setEdges, onEdgesChange] = useEdgesState(DEFAULT_EDGES);
   const [pipelineName, setPipelineName] = useState("My HLA Pipeline");
   const [activePipelineId, setActivePipelineId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [spotlightOpen, setSpotlightOpen] = useState(false);
+  const [galleryOpen,   setGalleryOpen]   = useState(false);
+
+  const { push: pushHistory, undo, redo, canUndo, canRedo } = useUndoRedo();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const reactFlowWrapperRef = useRef<HTMLDivElement>(null);
@@ -285,16 +297,48 @@ export function PipelineBuilder({
     screenToFlowPosition: (pos: { x: number; y: number }) => { x: number; y: number };
   } | null>(null);
 
-  // Stable ref so isValidConnection (a useCallback with no deps) can read
-  // the current nodes list without being recreated on every render.
+  // Stable refs so callbacks can always read the latest nodes/edges.
   const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+  useEffect(() => { edgesRef.current = edges; }, [edges]);
 
   const { pipelines, loadPipelines, savePipeline, removePipeline } = usePipelines();
 
   useEffect(() => {
     loadPipelines();
   }, [loadPipelines]);
+
+  // Propagate job completion into ResultsNode data so the node can show
+  // "View Results" button and trigger the panel via custom DOM event.
+  const prevJobStatus = useRef<string | null>(null);
+  useEffect(() => {
+    const s = job?.status ?? null;
+    if (s === prevJobStatus.current) return;
+    prevJobStatus.current = s;
+
+    if (s === "completed" || s === "failed") {
+      setNodes((prev) =>
+        prev.map((n) =>
+          n.type === "results"
+            ? {
+                ...n,
+                data: {
+                  ...n.data,
+                  jobDone: true,
+                  jobStatus: s,
+                },
+              }
+            : n
+        )
+      );
+      // Auto-open the results panel when job completes
+      if (s === "completed") {
+        window.dispatchEvent(new CustomEvent("openResultsPanel", { detail: { tab: "summary" } }));
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.status]);
 
   // Build current graph from nodes/edges state
   function getCurrentGraph(): GraphData {
@@ -318,9 +362,129 @@ export function PipelineBuilder({
   const graph = getCurrentGraph();
   const { valid, errors } = validatePipeline(graph);
 
+  // ── Undo / Redo ──────────────────────────────────────────────────────────
+
+  const handleUndo = useCallback(() => {
+    const snap = undo({ nodes: nodesRef.current, edges: edgesRef.current });
+    if (snap) { setNodes(snap.nodes); setEdges(snap.edges); }
+  }, [undo, setNodes, setEdges]);
+
+  const handleRedo = useCallback(() => {
+    const snap = redo({ nodes: nodesRef.current, edges: edgesRef.current });
+    if (snap) { setNodes(snap.nodes); setEdges(snap.edges); }
+  }, [redo, setNodes, setEdges]);
+
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────
+  // Keep a mutable ref so the single event-listener closure always calls
+  // the latest versions of save / undo / redo without re-registering.
+  const actionsRef = useRef({
+    handleUndo, handleRedo, handleSave: () => { /* filled below */ },
+    setSpotlightOpen, setGalleryOpen,
+  });
+  useEffect(() => {
+    actionsRef.current.handleUndo        = handleUndo;
+    actionsRef.current.handleRedo        = handleRedo;
+    actionsRef.current.setSpotlightOpen  = setSpotlightOpen;
+    actionsRef.current.setGalleryOpen    = setGalleryOpen;
+  });
+
+  useEffect(() => {
+    function handler(e: KeyboardEvent) {
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod && e.key === "Escape") {
+        actionsRef.current.setSpotlightOpen(false);
+        actionsRef.current.setGalleryOpen(false);
+        return;
+      }
+      if (!mod) return;
+      const k = e.key.toLowerCase();
+      if (k === "k") { e.preventDefault(); actionsRef.current.setSpotlightOpen((o) => !o); return; }
+      if (k === "s") { e.preventDefault(); actionsRef.current.handleSave(); return; }
+      if (k === "z" && !e.shiftKey) { e.preventDefault(); actionsRef.current.handleUndo(); return; }
+      if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); actionsRef.current.handleRedo(); return; }
+    }
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []); // registers once; always calls latest via actionsRef
+
+  // ── Template apply ───────────────────────────────────────────────────────
+
+  function applyTemplate(template: PipelineTemplate) {
+    pushHistory({ nodes: nodesRef.current, edges: edgesRef.current });
+    const { nodes: tplNodes, edges: tplEdges } = template.build();
+    setPipelineName(template.name);
+    setActivePipelineId(null);
+    setNodes(tplNodes);
+    setEdges(tplEdges);
+  }
+
+  // ── Spotlight: add node at canvas centre ─────────────────────────────────
+
+  function canvasCenter() {
+    return (
+      reactFlowRef.current?.screenToFlowPosition({
+        x: window.innerWidth / 2,
+        y: window.innerHeight / 2,
+      }) ?? { x: 300, y: 300 }
+    );
+  }
+
+  function handleSpotlightAddModule(module: NfCoreModule) {
+    pushHistory({ nodes: nodesRef.current, edges: edgesRef.current });
+    setNodes((nds) => [
+      ...nds,
+      {
+        id: makeId("nfmod"),
+        type: "nfcoreModule",
+        position: canvasCenter(),
+        data: {
+          label:      module.id,
+          tool:       module.tool,
+          subcommand: module.subcommand,
+          description:module.description,
+          category:   module.category,
+          inputs:     module.inputs,
+          outputs:    module.outputs,
+        },
+      },
+    ]);
+  }
+
+  function handleSpotlightAddPipeline(pipeline: NfCorePipeline) {
+    pushHistory({ nodes: nodesRef.current, edges: edgesRef.current });
+    setNodes((nds) => [
+      ...nds,
+      {
+        id: makeId("nfpipe"),
+        type: "nfcorePipeline",
+        position: canvasCenter(),
+        data: {
+          label:      pipeline.full_name,
+          pipelineId: pipeline.id,
+          description:pipeline.description,
+          stars:      pipeline.stars,
+        },
+      },
+    ]);
+  }
+
+  // ── Spotlight command handler ─────────────────────────────────────────────
+
+  function handleSpotlightCommand(id: string) {
+    if (id === "new")       { handleNew();              return; }
+    if (id === "save")      { handleSave();             return; }
+    if (id === "run")       { handleRun();              return; }
+    if (id === "undo")      { handleUndo();             return; }
+    if (id === "redo")      { handleRedo();             return; }
+    if (id === "templates") { setGalleryOpen(true);    return; }
+  }
+
   const onConnect = useCallback(
-    (connection: Connection) => setEdges((eds) => addEdge(connection, eds)),
-    [setEdges]
+    (connection: Connection) => {
+      pushHistory({ nodes: nodesRef.current, edges: edgesRef.current });
+      setEdges((eds) => addEdge(connection, eds));
+    },
+    [setEdges, pushHistory]
   );
 
   const isValidConnection = useCallback((connection: Connection | Edge) => {
@@ -376,6 +540,8 @@ export function PipelineBuilder({
     const nodeType = e.dataTransfer.getData("nodeType");
     if (!nodeType || !reactFlowRef.current) return;
 
+    pushHistory({ nodes: nodesRef.current, edges: edgesRef.current });
+
     const position = reactFlowRef.current.screenToFlowPosition({
       x: e.clientX,
       y: e.clientY,
@@ -426,7 +592,11 @@ export function PipelineBuilder({
     }
   }
 
+  // Keep the actionsRef.handleSave always pointing to the latest handleSave.
+  actionsRef.current.handleSave = handleSave;
+
   async function handleLoad(pipelineId: string) {
+    pushHistory({ nodes: nodesRef.current, edges: edgesRef.current });
     const p = await getPipeline(pipelineId);
     setPipelineName(p.name);
     setActivePipelineId(p.pipeline_id);
@@ -450,6 +620,7 @@ export function PipelineBuilder({
   }
 
   function handleNew() {
+    pushHistory({ nodes: nodesRef.current, edges: edgesRef.current });
     setPipelineName("New Pipeline");
     setActivePipelineId(null);
     setNodes([]);
@@ -516,8 +687,38 @@ export function PipelineBuilder({
     setEdges((prev) => [...prev, ...newEdges]);
   }
 
+  // Compute whether InputFileNode already has an uploaded file / dataset ID.
+  const inputNodeData = useMemo(() => {
+    const n = nodes.find((nd) => nd.type === "inputFile");
+    return n?.data as InputFileNodeData | undefined;
+  }, [nodes]);
+
   function handleRun() {
     if (!valid) return;
+
+    const d = inputNodeData;
+
+    // 1. Pre-uploaded via the node upload widget
+    if (d?.inputMode !== "dataset" && d?.presign && d?.uploadedFilename) {
+      onRunRequested(d.presign, d.uploadedFilename, d.fileType ?? "fastq", activePipelineId);
+      return;
+    }
+
+    // 2. Dataset / storage-key mode — build a synthetic presign
+    if (d?.inputMode === "dataset" && d?.datasetId?.trim()) {
+      const synth: PresignResponse = {
+        upload_url: "",
+        storage_key: d.datasetId.trim(),
+        recommended_tier: "medium",
+        estimated_cost_usd: 1.20,
+        tier_rationale: "Dataset ID provided — select compute tier manually.",
+      };
+      const name = d.datasetId.trim().split("/").pop() || "dataset";
+      onRunRequested(synth, name, d.fileType ?? "fastq", activePipelineId);
+      return;
+    }
+
+    // 3. Fall back: open file picker in toolbar (original behaviour)
     fileInputRef.current?.click();
   }
 
@@ -553,7 +754,13 @@ export function PipelineBuilder({
             onNew={handleNew}
             onDelete={handleDelete}
             onRun={handleRun}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+            onTemplates={() => setGalleryOpen(true)}
+            onSpotlight={() => setSpotlightOpen(true)}
             canRun={valid}
+            canUndo={canUndo}
+            canRedo={canRedo}
             saving={saving}
             validationErrors={errors}
           />
@@ -599,6 +806,23 @@ export function PipelineBuilder({
         style={{ display: "none" }}
         onChange={handleFileSelected}
       />
+
+      {spotlightOpen && (
+        <Spotlight
+          onClose={() => setSpotlightOpen(false)}
+          onCommand={handleSpotlightCommand}
+          onTemplate={applyTemplate}
+          onAddModule={handleSpotlightAddModule}
+          onAddPipeline={handleSpotlightAddPipeline}
+        />
+      )}
+
+      {galleryOpen && (
+        <TemplateGallery
+          onClose={() => setGalleryOpen(false)}
+          onSelect={applyTemplate}
+        />
+      )}
     </div>
   );
 }

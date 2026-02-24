@@ -38,6 +38,7 @@ services:
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
       EC2_BACKEND: ${EC2_BACKEND:-mock}
       HLA_BACKEND: ${HLA_BACKEND:-mock}
+      NEXTFLOW_BACKEND: ${NEXTFLOW_BACKEND:-mock}
       UPLOADS_DIR: /uploads
     volumes:
       - uploads_data:/uploads
@@ -60,6 +61,7 @@ services:
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
       EC2_BACKEND: ${EC2_BACKEND:-mock}
       HLA_BACKEND: ${HLA_BACKEND:-mock}
+      NEXTFLOW_BACKEND: ${NEXTFLOW_BACKEND:-mock}
       UPLOADS_DIR: /uploads
     volumes:
       - uploads_data:/uploads

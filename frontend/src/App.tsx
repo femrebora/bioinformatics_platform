@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { UploadForm } from "./components/UploadForm";
 import { TierConfirm } from "./components/TierConfirm";
 import { JobProgress } from "./components/JobProgress";
-import { ResultTable } from "./components/ResultTable";
+import { ResultViewer } from "./components/ResultViewer";
+import { ResultsPanel } from "./components/ResultsPanel";
 import { PipelineBuilder } from "./builder/PipelineBuilder";
 import { createJob } from "./api/client";
 import { useJobPoller } from "./hooks/useJobPoller";
@@ -26,6 +27,7 @@ type AppState =
 
 export default function App() {
   const [state, setState] = useState<AppState>({ phase: "builder" });
+  const [panelOpen, setPanelOpen] = useState(false);
 
   const jobId =
     state.phase === "processing" || state.phase === "done"
@@ -44,6 +46,20 @@ export default function App() {
       setState({ phase: "done", jobId: state.jobId });
     }
   }, [job, state.phase]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-open results panel when job finishes (for Quick Run tab)
+  useEffect(() => {
+    if (job?.status === "completed" || job?.status === "failed") {
+      setPanelOpen(true);
+    }
+  }, [job?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Listen for ResultsNode "View Results" button click
+  useEffect(() => {
+    function handler() { setPanelOpen(true); }
+    window.addEventListener("openResultsPanel", handler);
+    return () => window.removeEventListener("openResultsPanel", handler);
+  }, []);
 
   function handlePresigned(presign: PresignResponse, file: File) {
     const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
@@ -84,7 +100,8 @@ export default function App() {
         state.presign.storage_key,
         state.fileType,
         tier,
-        estimatedCostUsd
+        estimatedCostUsd,
+        state.pipelineId   // forwards the nf-core pipeline ID (or null for HLA)
       );
       setState({ phase: "processing", jobId: newJob.job_id });
     } catch (err: unknown) {
@@ -131,6 +148,15 @@ export default function App() {
           >
             Quick Run
           </button>
+          {job && (job.status === "completed" || job.status === "failed") && (
+            <button
+              style={{ ...styles.navBtn, background: panelOpen ? "rgba(255,255,255,0.2)" : "#16a34a", borderColor: "#16a34a" }}
+              onClick={() => setPanelOpen((o) => !o)}
+              title="Toggle results panel"
+            >
+              📊 Results
+            </button>
+          )}
         </nav>
       </header>
 
@@ -141,6 +167,7 @@ export default function App() {
           TierConfirmComponent={TierConfirm}
           onConfirm={handleBuilderConfirm}
           onCancelConfirm={() => setState({ phase: "builder" })}
+          job={job}
         />
       ) : (
         <main style={styles.main}>
@@ -160,7 +187,7 @@ export default function App() {
           {state.phase === "processing" && <JobProgress job={job} />}
 
           {state.phase === "done" && job && job.status === "completed" && (
-            <ResultTable job={job} onReset={handleReset} />
+            <ResultViewer job={job} onReset={handleReset} />
           )}
 
           {state.phase === "done" && job && job.status === "failed" && (
@@ -183,6 +210,15 @@ export default function App() {
             </div>
           )}
         </main>
+      )}
+      {/* Results panel — always rendered so transitions are smooth */}
+      {job && job.result && (
+        <ResultsPanel
+          job={job}
+          isOpen={panelOpen}
+          onClose={() => setPanelOpen(false)}
+          onReset={handleReset}
+        />
       )}
     </div>
   );

@@ -8,8 +8,44 @@ export interface HLAAllele {
   allele_2: string;
 }
 
+export interface VcfVariant {
+  chrom: string;
+  pos: number;
+  ref: string;
+  alt: string;
+  qual?: string;
+  filter?: string;
+}
+
+export interface ResultFile {
+  name: string;
+  path: string;
+  size_bytes?: number;
+  url?: string;
+}
+
+/**
+ * Flexible result payload. The `type` field is the discriminator.
+ * Absent or "hla_alleles" → HLA allele table (legacy + current backend).
+ * Other types are placeholders for future pipeline outputs.
+ */
 export interface JobResult {
-  hla_alleles: HLAAllele[];
+  /** Absent for legacy HLA results; set by future pipeline runners. */
+  type?: "hla_alleles" | "table" | "vcf" | "html_report" | "text" | "files";
+  // hla_alleles / legacy
+  hla_alleles?: HLAAllele[];
+  // table
+  columns?: string[];
+  rows?: Record<string, string | number>[];
+  // vcf
+  variants?: VcfVariant[];
+  // html_report
+  html?: string;
+  // text
+  content?: string;
+  // files
+  files?: ResultFile[];
+  // always present
   instance_type: string;
   runtime_seconds: number;
 }

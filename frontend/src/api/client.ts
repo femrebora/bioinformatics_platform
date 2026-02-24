@@ -24,13 +24,15 @@ export async function createJob(
   storageKey: string,
   fileType: string,
   tier: Tier,
-  estimatedCostUsd: number
+  estimatedCostUsd: number,
+  pipelineId?: string | null
 ): Promise<Job> {
   const { data } = await http.post<Job>("/jobs", {
     storage_key: storageKey,
     file_type: fileType,
     tier,
     estimated_cost_usd: estimatedCostUsd,
+    ...(pipelineId ? { pipeline_id: pipelineId } : {}),
   });
   return data;
 }

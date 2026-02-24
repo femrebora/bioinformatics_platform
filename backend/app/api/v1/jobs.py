@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.database import get_db
 from app.models.job import Job
 from app.schemas.job import JobCreate, JobResponse
-from app.tasks.pipeline import run_hla_pipeline
+from app.tasks.pipeline import run_pipeline
 
 router = APIRouter()
 
@@ -28,6 +28,7 @@ def _serialize_job(job: Job) -> JobResponse:
         stage=job.stage,
         tier=job.tier,
         estimated_cost_usd=job.estimated_cost_usd,
+        pipeline_id=job.pipeline_id,
         result=result,
         error=job.error,
     )
@@ -35,18 +36,15 @@ def _serialize_job(job: Job) -> JobResponse:
 
 @router.post("", response_model=JobResponse, status_code=201)
 async def create_job(body: JobCreate, db: AsyncSession = Depends(get_db)):
-    file_type = body.file_type.lower()
-    if file_type not in ("fastq", "bam"):
-        raise HTTPException(status_code=422, detail="file_type must be 'fastq' or 'bam'.")
-
     job = Job(
         id=str(uuid.uuid4()),
         status="pending",
         stage=None,
-        file_type=file_type,
+        file_type=body.file_type.lower(),
         storage_key=body.storage_key,
         tier=body.tier,
         estimated_cost_usd=body.estimated_cost_usd,
+        pipeline_id=body.pipeline_id or None,
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
@@ -54,7 +52,7 @@ async def create_job(body: JobCreate, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(job)
 
-    task = run_hla_pipeline.delay(job.id)
+    task = run_pipeline.delay(job.id)
     job.celery_task_id = task.id
     await db.commit()
 

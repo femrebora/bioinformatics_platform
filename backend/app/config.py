@@ -12,9 +12,10 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = "redis://redis:6379/0"
 
     # Backend injection via env vars
-    STORAGE_BACKEND: str = "local"   # local | s3
-    EC2_BACKEND: str = "mock"        # mock | aws
-    HLA_BACKEND: str = "mock"        # mock | hlahd
+    STORAGE_BACKEND: str = "local"       # local | s3
+    EC2_BACKEND: str = "mock"            # mock | aws
+    HLA_BACKEND: str = "mock"            # mock | hlahd
+    NEXTFLOW_BACKEND: str = "mock"       # mock | nextflow
 
     # Local uploads directory
     UPLOADS_DIR: str = "/uploads"

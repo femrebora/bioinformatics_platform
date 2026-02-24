@@ -56,99 +56,100 @@ export interface ValidationResult {
 export function validatePipeline(graph: GraphData): ValidationResult {
   const errors: string[] = [];
 
-  const inputNodes = graph.nodes.filter((n) => n.type === "inputFile");
-  const hlaNodes = graph.nodes.filter((n) => n.type === "hlaTyping");
-  const resultsNodes = graph.nodes.filter((n) => n.type === "results");
-  const converterNodes = graph.nodes.filter((n) => n.type === "fastqToBam");
+  const inputNodes    = graph.nodes.filter((n) => n.type === "inputFile");
+  const hlaNodes      = graph.nodes.filter((n) => n.type === "hlaTyping");
+  const resultsNodes  = graph.nodes.filter((n) => n.type === "results");
+  const converterNodes= graph.nodes.filter((n) => n.type === "fastqToBam");
+  const nfModuleNodes = graph.nodes.filter((n) => n.type === "nfcoreModule");
+  const nfPipeNodes   = graph.nodes.filter((n) => n.type === "nfcorePipeline");
 
-  // No HLA nodes at all — nothing to validate (pure nf-core canvas or empty canvas)
-  if (
-    inputNodes.length === 0 &&
-    hlaNodes.length === 0 &&
-    resultsNodes.length === 0
-  ) {
-    return { valid: true, errors: [] };
+  const hasHlaParts   = hlaNodes.length > 0 || converterNodes.length > 0;
+  const hasNfcoreParts= nfModuleNodes.length > 0 || nfPipeNodes.length > 0;
+
+  // ── Empty canvas ────────────────────────────────────────────────────────
+  if (graph.nodes.length === 0) {
+    // Disabled with no error message — user hasn't started yet
+    return { valid: false, errors: [] };
   }
 
-  if (inputNodes.length !== 1) {
-    errors.push(
-      inputNodes.length === 0
-        ? "Add an Input File node."
-        : "Only one Input File node is allowed."
-    );
-  }
-  if (hlaNodes.length !== 1) {
-    errors.push(
-      hlaNodes.length === 0
-        ? "Add an HLA-HD Typing node."
-        : "Only one HLA-HD Typing node is allowed."
-    );
-  }
-  if (resultsNodes.length !== 1) {
-    errors.push(
-      resultsNodes.length === 0
-        ? "Add a Results node."
-        : "Only one Results node is allowed."
-    );
-  }
-  if (converterNodes.length > 1) {
-    errors.push("Only one FASTQ → BAM converter is allowed.");
+  // ── Only generic nodes, nothing runnable yet ────────────────────────────
+  // e.g. just an InputFileNode or Results node alone — don't show HLA errors
+  if (!hasHlaParts && !hasNfcoreParts && resultsNodes.length === 0) {
+    return { valid: false, errors: [] };
   }
 
-  if (errors.length === 0) {
-    const inputId = inputNodes[0].id;
-    const hlaId = hlaNodes[0].id;
-    const resultsId = resultsNodes[0].id;
-
-    if (converterNodes.length === 1) {
-      // Path: Input →(file-out→fastq-in)→ Converter →(bam-out→file-in)→ HLA
-      const convId = converterNodes[0].id;
-
-      const hasInputToConv = graph.edges.some(
-        (e) =>
-          e.source === inputId &&
-          e.sourceHandle === "file-out" &&
-          e.target === convId &&
-          e.targetHandle === "fastq-in"
+  // ── HLA pipeline rules (only when HLA-HD or converter nodes are present) ─
+  if (hasHlaParts) {
+    if (inputNodes.length !== 1) {
+      errors.push(
+        inputNodes.length === 0
+          ? "Add an Input File node."
+          : "Only one Input File node is allowed."
       );
-      if (!hasInputToConv) {
-        errors.push("Connect Input File → FASTQ→BAM converter.");
-      }
-
-      const hasConvToHla = graph.edges.some(
-        (e) =>
-          e.source === convId &&
-          e.sourceHandle === "bam-out" &&
-          e.target === hlaId &&
-          e.targetHandle === "file-in"
+    }
+    if (hlaNodes.length !== 1) {
+      errors.push(
+        hlaNodes.length === 0
+          ? "Add an HLA-HD Typing node."
+          : "Only one HLA-HD Typing node is allowed."
       );
-      if (!hasConvToHla) {
-        errors.push("Connect FASTQ→BAM converter → HLA-HD Typing.");
-      }
-    } else {
-      // Direct path: Input →(file-out→file-in)→ HLA
-      const hasInputToHla = graph.edges.some(
-        (e) =>
-          e.source === inputId &&
-          e.sourceHandle === "file-out" &&
-          e.target === hlaId &&
-          e.targetHandle === "file-in"
-      );
-      if (!hasInputToHla) {
-        errors.push("Connect Input File → HLA-HD Typing.");
-      }
+    }
+    if (resultsNodes.length > 1) {
+      errors.push("Only one Results node is allowed.");
+    }
+    if (converterNodes.length > 1) {
+      errors.push("Only one FASTQ → BAM converter is allowed.");
     }
 
-    const hasHlaToResults = graph.edges.some(
-      (e) =>
-        e.source === hlaId &&
-        e.sourceHandle === "result-out" &&
-        e.target === resultsId &&
-        e.targetHandle === "result-in"
-    );
-    if (!hasHlaToResults) {
-      errors.push("Connect HLA-HD Typing → Results.");
+    if (errors.length === 0 && inputNodes.length === 1 && hlaNodes.length === 1) {
+      const inputId = inputNodes[0].id;
+      const hlaId   = hlaNodes[0].id;
+
+      if (converterNodes.length === 1) {
+        const convId = converterNodes[0].id;
+        const hasInputToConv = graph.edges.some(
+          (e) =>
+            e.source === inputId && e.sourceHandle === "file-out" &&
+            e.target === convId  && e.targetHandle === "fastq-in"
+        );
+        if (!hasInputToConv) errors.push("Connect Input File → FASTQ→BAM converter.");
+
+        const hasConvToHla = graph.edges.some(
+          (e) =>
+            e.source === convId && e.sourceHandle === "bam-out" &&
+            e.target === hlaId  && e.targetHandle === "file-in"
+        );
+        if (!hasConvToHla) errors.push("Connect FASTQ→BAM converter → HLA-HD Typing.");
+      } else {
+        const hasInputToHla = graph.edges.some(
+          (e) =>
+            e.source === inputId && e.sourceHandle === "file-out" &&
+            e.target === hlaId   && e.targetHandle === "file-in"
+        );
+        if (!hasInputToHla) errors.push("Connect Input File → HLA-HD Typing.");
+      }
+
+      if (resultsNodes.length === 1) {
+        const hasHlaToResults = graph.edges.some(
+          (e) =>
+            e.source === hlaId           && e.sourceHandle === "result-out" &&
+            e.target === resultsNodes[0].id && e.targetHandle === "result-in"
+        );
+        if (!hasHlaToResults) errors.push("Connect HLA-HD Typing → Results.");
+      }
     }
+  }
+
+  // ── nf-core rules (permissive — just needs at least one module/pipeline) ─
+  if (hasNfcoreParts && !hasHlaParts) {
+    // If an InputFileNode is present it should be connected to something
+    for (const inp of inputNodes) {
+      const connected = graph.edges.some((e) => e.source === inp.id);
+      if (!connected) {
+        errors.push(`"${(inp.data as { label?: string }).label ?? "Input File"}" is not connected to any module.`);
+      }
+    }
+    // Otherwise nf-core modules freely connected to each other → valid
   }
 
   return { valid: errors.length === 0, errors };
