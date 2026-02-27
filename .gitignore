@@ -50,3 +50,10 @@ htmlcov/
 *.log
 celerybeat-schedule
 celerybeat.pid
+
+# AI agent working dirs
+.claude-flow/
+.swarm/
+
+# Stray files
+which
