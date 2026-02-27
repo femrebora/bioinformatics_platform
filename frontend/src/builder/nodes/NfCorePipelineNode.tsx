@@ -1,10 +1,13 @@
 import { Handle, Position, useReactFlow } from "@xyflow/react";
+import { IGENOMES } from "../pipelineParams";
 
-interface NfCorePipelineNodeData {
+export interface NfCorePipelineNodeData {
   label: string;
   pipelineId: string;
   description: string | null;
   stars: number;
+  genome?: string;
+  params?: Record<string, unknown>;
 }
 
 interface NfCorePipelineNodeProps {
@@ -15,7 +18,7 @@ interface NfCorePipelineNodeProps {
 const COLOR = "#0e7490";
 
 export function NfCorePipelineNode({ id, data }: NfCorePipelineNodeProps) {
-  const { setNodes, setEdges } = useReactFlow();
+  const { setNodes, setEdges, updateNodeData } = useReactFlow();
 
   function handleDelete(e: React.MouseEvent) {
     e.stopPropagation();
@@ -23,19 +26,28 @@ export function NfCorePipelineNode({ id, data }: NfCorePipelineNodeProps) {
     setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
   }
 
+  function handleOpenParams(e: React.MouseEvent) {
+    e.stopPropagation();
+    window.dispatchEvent(
+      new CustomEvent("openParamPanel", { detail: { nodeId: id, pipelineId: data.pipelineId } })
+    );
+  }
+
+  const genome = data.genome ?? "";
+  const paramCount = Object.keys(data.params ?? {}).filter(
+    (k) => (data.params ?? {})[k] !== undefined && (data.params ?? {})[k] !== ""
+  ).length;
+
   return (
     <div style={styles.node}>
-      <Handle
-        type="target"
-        position={Position.Left}
-        id="nfc-in-data"
-        style={styles.handle}
-      />
+      <Handle type="target" position={Position.Left} id="nfc-in-data" style={styles.handle} />
+
       <div style={styles.header}>
         <span style={styles.icon}>🔬</span>
         <span style={styles.label} title={data.label}>{data.label}</span>
         <button onClick={handleDelete} style={styles.deleteBtn} title="Remove node">×</button>
       </div>
+
       <div style={styles.body}>
         {data.stars > 0 && (
           <div style={styles.stars}>⭐ {data.stars.toLocaleString()}</div>
@@ -47,13 +59,44 @@ export function NfCorePipelineNode({ id, data }: NfCorePipelineNodeProps) {
               : data.description}
           </div>
         )}
+
+        {/* Genome selector */}
+        <div style={{ marginTop: 8 }}>
+          <div style={styles.fieldLabel}>Reference genome</div>
+          <select
+            value={genome}
+            onChange={(e) => updateNodeData(id, { genome: e.target.value })}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              ...styles.select,
+              borderColor: genome ? "#0e7490" : "#fca5a5",
+              color: genome ? "#0f172a" : "#dc2626",
+            }}
+          >
+            <option value="">⚠ Select genome…</option>
+            {IGENOMES.map((g) => (
+              <option key={g.value} value={g.value}>
+                {g.label}{g.organism ? ` (${g.organism})` : ""}
+              </option>
+            ))}
+          </select>
+          {!genome && (
+            <div style={{ fontSize: 9, color: "#dc2626", marginTop: 2 }}>
+              Required — pipeline will fail without a genome build.
+            </div>
+          )}
+        </div>
+
+        {/* Parameters button */}
+        <button onClick={handleOpenParams} style={styles.paramsBtn}>
+          ⚙ Parameters
+          {paramCount > 0 && (
+            <span style={styles.paramBadge}>{paramCount}</span>
+          )}
+        </button>
       </div>
-      <Handle
-        type="source"
-        position={Position.Right}
-        id="nfc-out-results"
-        style={styles.handle}
-      />
+
+      <Handle type="source" position={Position.Right} id="nfc-out-results" style={styles.handle} />
     </div>
   );
 }
@@ -63,8 +106,8 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#fff",
     border: `2px solid ${COLOR}`,
     borderRadius: 8,
-    minWidth: 190,
-    maxWidth: 220,
+    minWidth: 200,
+    maxWidth: 240,
     boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
   },
   header: {
@@ -99,5 +142,40 @@ const styles: Record<string, React.CSSProperties> = {
   body: { padding: "8px 10px" },
   stars: { fontSize: 11, color: "#6b7280", marginBottom: 4 },
   desc: { fontSize: 10, color: "#6b7280", lineHeight: 1.4 },
+  fieldLabel: { fontSize: 10, fontWeight: 600, color: "#6b7280", marginBottom: 3, textTransform: "uppercase" as const, letterSpacing: ".04em" },
+  select: {
+    width: "100%",
+    fontSize: 11,
+    padding: "4px 7px",
+    borderRadius: 5,
+    border: "1.5px solid #d1d5db",
+    background: "#f9fafb",
+    color: "#0f172a",
+    cursor: "pointer",
+  },
+  paramsBtn: {
+    marginTop: 8,
+    width: "100%",
+    padding: "5px 10px",
+    borderRadius: 6,
+    border: "1px solid #0e7490",
+    background: "#f0fdfa",
+    color: "#0e7490",
+    cursor: "pointer",
+    fontSize: 11,
+    fontWeight: 600,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  paramBadge: {
+    background: "#0e7490",
+    color: "#fff",
+    borderRadius: 999,
+    fontSize: 9,
+    fontWeight: 700,
+    padding: "1px 6px",
+  },
   handle: { width: 8, height: 8, background: COLOR },
 };

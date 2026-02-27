@@ -1,10 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Handle, Position, useReactFlow, useEdges, useNodes } from "@xyflow/react";
 import type { Edge, Node } from "@xyflow/react";
 import { extractExtensions } from "../validation";
 import type { NfCoreIOPort } from "../../types/nfcore";
-import type { PresignResponse } from "../../types/job";
-import { presignUpload, uploadFile } from "../../api/client";
+import type { PresignResponse, JobListItem } from "../../types/job";
+import { presignUpload, uploadFile, getCompletedJobs, getJob } from "../../api/client";
 
 // ── File format catalogue ──────────────────────────────────────────────────
 
@@ -97,6 +97,33 @@ const EXT_TO_FORMAT: Record<string, string> = {
   yaml: "yaml", yml: "yaml",
 };
 
+// ── Topics → format inference for Snakemake Workflow nodes ─────────────────
+
+/** Each entry: [topic substrings to match, format values to unlock] */
+const TOPIC_FORMAT_HINTS: [string[], string[]][] = [
+  [["rna-seq", "rnaseq", "scrna", "single-cell", "transcriptom", "metatranscript"], ["fastq"]],
+  [["metagenom"], ["fastq"]],
+  [["chip-seq", "chipseq", "atac-seq", "atacseq", "cut&run", "cutrun", "cutnrun"], ["fastq"]],
+  [["methylation", "bisulfite", "wgbs", "rrbs"], ["fastq"]],
+  [["amplicon", "16s", "18s", "its-", "ampliseq"], ["fastq"]],
+  [["whole-genome", "whole-exome", "wgs", "wes", "ngs", "variant-call", "gatk", "sarek"], ["fastq", "bam"]],
+  [["assembly", "de-novo", "denovo"], ["fastq"]],
+  [["phylogen", "phylogenomics"], ["fasta", "fastq"]],
+  [["proteom", "mass-spec", "peptide"], ["mzml", "mzxml", "mgf"]],
+  [["scatac", "scchip"], ["fastq"]],
+];
+
+function inferFormatsFromTopics(topics: string[]): string[] {
+  const joined = topics.join(" ").toLowerCase();
+  const formats = new Set<string>();
+  for (const [keys, fmts] of TOPIC_FORMAT_HINTS) {
+    if (keys.some((k) => joined.includes(k))) {
+      for (const f of fmts) formats.add(f);
+    }
+  }
+  return [...formats];
+}
+
 // ── Format restriction (from connections) ──────────────────────────────────
 
 interface AllowedResult {
@@ -111,6 +138,7 @@ function deriveAllowed(nodeId: string, edges: Edge[], nodes: Node[]): AllowedRes
   const allowed = new Set<string>();
   let anyRestriction = false;
   let hasPipelineBlock = false;
+  let hasSmkGeneric = false;
 
   for (const edge of outEdges) {
     const th = edge.targetHandle ?? "";
@@ -120,6 +148,29 @@ function deriveAllowed(nodeId: string, edges: Edge[], nodes: Node[]): AllowedRes
       allowed.add("fastq"); anyRestriction = true;
     } else if (th === "file-in") {
       allowed.add("fastq"); allowed.add("bam"); anyRestriction = true;
+    } else if (th.startsWith("smk-in-")) {
+      const portName = th.slice("smk-in-".length);
+      if (portName === "data") {
+        // Generic handle: try to infer format from workflow topics first
+        const rawTopics = (target?.data as { topics?: string[] | null } | undefined)?.topics;
+        const topics = Array.isArray(rawTopics) ? rawTopics : [];
+        const inferred = inferFormatsFromTopics(topics);
+        if (inferred.length > 0) {
+          for (const f of inferred) { allowed.add(f); anyRestriction = true; }
+        } else {
+          hasSmkGeneric = true; // no topics → show note
+        }
+      } else {
+        // Snakemake wrapper port names are often the format itself (bam, vcf, fastq…)
+        const directFmt =
+          EXT_TO_FORMAT[portName] ??
+          (ALL_OPTIONS.find((o) => o.value === portName) ? portName : null);
+        if (directFmt) {
+          allowed.add(directFmt);
+          anyRestriction = true;
+        }
+        // Generic port names (reads, sample, input1, …) → no restriction, show all
+      }
     } else if (th.startsWith("nfc-in-") && target) {
       if (target.type === "nfcorePipeline") {
         const fmts = (target.data as { inputFormats?: string[] }).inputFormats;
@@ -150,6 +201,13 @@ function deriveAllowed(nodeId: string, edges: Edge[], nodes: Node[]): AllowedRes
     };
   }
 
+  if (hasSmkGeneric && !anyRestriction) {
+    return {
+      allowed: new Set<string>(),
+      note: "Snakemake workflow has no input format metadata — select the file format manually.",
+    };
+  }
+
   return { allowed: anyRestriction ? allowed : new Set<string>(), note: null };
 }
 
@@ -158,14 +216,36 @@ function deriveAllowed(nodeId: string, edges: Edge[], nodes: Node[]): AllowedRes
 export interface InputFileNodeData {
   label: string;
   fileType: string;
-  inputMode?: "upload" | "dataset";
-  // upload mode
+  inputMode?: "upload" | "dataset" | "sra" | "library";
+  pairedEnd?: boolean;
+  // upload mode (R1)
   presign?: PresignResponse;
   uploadedFilename?: string;
   uploadStatus?: "idle" | "uploading" | "done" | "error";
   uploadError?: string;
+  // upload mode (R2 — paired-end)
+  presignR2?: PresignResponse;
+  uploadedFilenameR2?: string;
+  uploadStatusR2?: "idle" | "uploading" | "done" | "error";
+  uploadErrorR2?: string;
   // dataset mode
   datasetId?: string;
+  // SRA / URL mode
+  sraValue?: string;
+}
+
+// ── SRA / URL helpers ──────────────────────────────────────────────────────
+
+/** Returns "sra" | "url" | "invalid" */
+function classifySraValue(val: string): "sra" | "url" | "invalid" {
+  const v = val.trim();
+  if (/^[SDE]RR\d{6,}$/.test(v)) return "sra";
+  if (/^(PRJNA|PRJEB|PRJDB)\d+$/.test(v)) return "sra";
+  if (/^(SRS|ERS|DRS)\d{6,}$/.test(v)) return "sra";   // SRA sample accessions
+  if (/^(SRX|ERX|DRX)\d{6,}$/.test(v)) return "sra";   // SRA experiment accessions
+  if (/^https?:\/\/.{4,}/.test(v)) return "url";
+  if (/^ftp:\/\/.{4,}/.test(v)) return "url";
+  return "invalid";
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
@@ -180,9 +260,53 @@ export function InputFileNode({ id, data }: InputFileNodeProps) {
   const edges = useEdges();
   const nodes = useNodes();
   const fileRef = useRef<HTMLInputElement>(null);
+  const fileRefR2 = useRef<HTMLInputElement>(null);
+
+  // ── Library mode state ────────────────────────────────────────────────────
+  const [libJobs, setLibJobs] = useState<JobListItem[]>([]);
+  const [libLoading, setLibLoading] = useState(false);
+  const [libSelectedJob, setLibSelectedJob] = useState<string>("");
+  const [libFiles, setLibFiles] = useState<{ name: string; path: string }[]>([]);
+  const [libSelectedFile, setLibSelectedFile] = useState<string>("");
+
+  const loadLibJobs = useCallback(async () => {
+    setLibLoading(true);
+    try {
+      const jobs = await getCompletedJobs();
+      setLibJobs(jobs);
+    } finally {
+      setLibLoading(false);
+    }
+  }, []);
+
+  async function handleLibJobChange(jobId: string) {
+    setLibSelectedJob(jobId);
+    setLibFiles([]);
+    setLibSelectedFile("");
+    if (!jobId) return;
+    try {
+      const job = await getJob(jobId);
+      const files = job.result?.files ?? [];
+      setLibFiles(files.map((f) => ({ name: f.name, path: f.path })));
+    } catch {
+      setLibFiles([]);
+    }
+  }
+
+  function applyLibrarySelection() {
+    if (!libSelectedFile) return;
+    const file = libFiles.find((f) => f.path === libSelectedFile);
+    if (!file) return;
+    // Infer file type from name
+    const ext = file.name.split(".").slice(1).join(".").toLowerCase();
+    const fmt = EXT_TO_FORMAT[ext] ?? EXT_TO_FORMAT[file.name.split(".").pop() ?? ""] ?? "fastq";
+    updateNodeData(id, { datasetId: libSelectedFile, fileType: fmt });
+  }
 
   const mode = data.inputMode ?? "upload";
   const uploadStatus = data.uploadStatus ?? "idle";
+  const uploadStatusR2 = data.uploadStatusR2 ?? "idle";
+  const isPairedEnd = data.pairedEnd ?? false;
 
   const { allowed, note } = deriveAllowed(id, edges, nodes);
   const isDisabled = allowed === null;
@@ -221,6 +345,23 @@ export function InputFileNode({ id, data }: InputFileNodeProps) {
     }
   }
 
+  async function handleFileChangeR2(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    updateNodeData(id, { uploadStatusR2: "uploading", uploadErrorR2: undefined });
+    try {
+      const presign = await presignUpload(file.name, file.size);
+      await uploadFile(presign.upload_url, file);
+      updateNodeData(id, { uploadStatusR2: "done", presignR2: presign, uploadedFilenameR2: file.name });
+    } catch (err) {
+      updateNodeData(id, {
+        uploadStatusR2: "error",
+        uploadErrorR2: err instanceof Error ? err.message : "Upload failed",
+      });
+    }
+  }
+
   const visibleGroups = FILE_FORMATS.map((g) => ({
     ...g,
     options: isRestricted ? g.options.filter((o) => allowed!.has(o.value)) : g.options,
@@ -251,11 +392,30 @@ export function InputFileNode({ id, data }: InputFileNodeProps) {
           >
             Dataset ID
           </button>
+          <button
+            style={{ ...s.modeBtn, ...(mode === "sra" ? s.modeBtnActive : {}) }}
+            onClick={() => updateNodeData(id, { inputMode: "sra" })}
+          >
+            SRA / URL
+          </button>
+          <button
+            style={{ ...s.modeBtn, ...(mode === "library" ? s.modeBtnActive : {}) }}
+            onClick={() => {
+              updateNodeData(id, { inputMode: "library" });
+              loadLibJobs();
+            }}
+          >
+            Library
+          </button>
         </div>
 
         {/* Upload section */}
         {mode === "upload" && (
           <div style={s.section}>
+            {/* R1 */}
+            <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 3, fontWeight: isPairedEnd ? 600 : undefined }}>
+              {isPairedEnd ? "R1 (forward reads)" : ""}
+            </div>
             {uploadStatus === "idle" && (
               <button style={s.uploadBtn} onClick={() => fileRef.current?.click()}>
                 Choose File…
@@ -293,6 +453,73 @@ export function InputFileNode({ id, data }: InputFileNodeProps) {
               style={{ display: "none" }}
               onChange={handleFileChange}
             />
+
+            {/* Paired-end toggle (only for FASTQ) */}
+            {(data.fileType === "fastq" || !data.fileType) && (
+              <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                <input
+                  type="checkbox"
+                  id={`pe-${id}`}
+                  checked={isPairedEnd}
+                  onChange={(e) => updateNodeData(id, {
+                    pairedEnd: e.target.checked,
+                    ...(e.target.checked ? {} : {
+                      presignR2: undefined, uploadedFilenameR2: undefined, uploadStatusR2: "idle",
+                    }),
+                  })}
+                  style={{ cursor: "pointer" }}
+                />
+                <label htmlFor={`pe-${id}`} style={{ fontSize: 10, color: "#374151", cursor: "pointer" }}>
+                  Paired-end (R1 + R2)
+                </label>
+              </div>
+            )}
+
+            {/* R2 upload slot */}
+            {isPairedEnd && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 3, fontWeight: 600 }}>
+                  R2 (reverse reads)
+                </div>
+                {uploadStatusR2 === "idle" && (
+                  <button style={s.uploadBtn} onClick={() => fileRefR2.current?.click()}>
+                    Choose R2 File…
+                  </button>
+                )}
+                {uploadStatusR2 === "uploading" && (
+                  <div style={s.statusRow}>
+                    <span style={s.spinner}>⟳</span>
+                    <span style={{ fontSize: 11, color: "#6b7280" }}>Uploading R2…</span>
+                  </div>
+                )}
+                {uploadStatusR2 === "done" && (
+                  <div style={s.doneRow}>
+                    <span style={s.doneIcon}>✓</span>
+                    <span style={s.doneFilename} title={data.uploadedFilenameR2}>
+                      {data.uploadedFilenameR2}
+                    </span>
+                    <button style={s.changeBtn} onClick={() => {
+                      updateNodeData(id, { uploadStatusR2: "idle", presignR2: undefined, uploadedFilenameR2: undefined });
+                    }}>×</button>
+                  </div>
+                )}
+                {uploadStatusR2 === "error" && (
+                  <div>
+                    <div style={s.errorMsg}>{data.uploadErrorR2 ?? "Upload failed"}</div>
+                    <button style={s.uploadBtn} onClick={() => {
+                      updateNodeData(id, { uploadStatusR2: "idle" });
+                      fileRefR2.current?.click();
+                    }}>Retry</button>
+                  </div>
+                )}
+                <input
+                  ref={fileRefR2}
+                  type="file"
+                  style={{ display: "none" }}
+                  onChange={handleFileChangeR2}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -307,6 +534,111 @@ export function InputFileNode({ id, data }: InputFileNodeProps) {
               style={s.datasetInput}
             />
             <div style={s.datasetHint}>Enter the storage key of a previously uploaded file.</div>
+          </div>
+        )}
+
+        {/* SRA / URL section */}
+        {mode === "sra" && (() => {
+          const sraRaw = data.sraValue ?? "";
+          const kind = sraRaw.trim() ? classifySraValue(sraRaw) : null;
+          return (
+            <div style={s.section}>
+              <input
+                type="text"
+                placeholder="SRR123456 or https://…"
+                value={sraRaw}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  const k = classifySraValue(v);
+                  // Auto-set fileType to fastq for SRA accessions
+                  updateNodeData(id, {
+                    sraValue: v,
+                    ...(k === "sra" ? { fileType: "fastq" } : {}),
+                  });
+                }}
+                style={s.datasetInput}
+                spellCheck={false}
+                autoCorrect="off"
+                autoCapitalize="off"
+              />
+              {kind === "sra" && /^(PRJNA|PRJEB|PRJDB)\d+/i.test(sraRaw.trim()) && (
+                <div style={{ ...s.sraInvalid, background: "#fef3c7", borderColor: "#fbbf24", color: "#92400e" }}>
+                  ⚠ Project accessions (PRJNA/PRJEB) are not yet supported. Enter a single run accession (SRR/ERR/DRR).
+                </div>
+              )}
+              {kind === "sra" && !/^(PRJNA|PRJEB|PRJDB)\d+/i.test(sraRaw.trim()) && (
+                <div style={s.sraValid}>
+                  ✓ SRA accession — file will be downloaded by the worker
+                </div>
+              )}
+              {kind === "url" && (
+                <div style={s.sraUrl}>
+                  ↗ URL — worker will fetch this file directly
+                </div>
+              )}
+              {kind === "invalid" && sraRaw.trim().length > 2 && (
+                <div style={s.sraInvalid}>
+                  Enter SRR/ERR/DRR accession or https:// URL
+                </div>
+              )}
+              {!sraRaw.trim() && (
+                <div style={s.datasetHint}>
+                  Accepted: SRR/ERR/DRR runs, PRJNA/PRJEB projects, or any https:// URL.
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Library (past result files) section */}
+        {mode === "library" && (
+          <div style={s.section}>
+            {libLoading ? (
+              <div style={{ fontSize: 11, color: "#6b7280" }}>Loading jobs…</div>
+            ) : libJobs.length === 0 ? (
+              <div style={{ fontSize: 11, color: "#9ca3af" }}>No completed jobs found.</div>
+            ) : (
+              <>
+                <div style={s.fieldLabel}>From job</div>
+                <select
+                  value={libSelectedJob}
+                  onChange={(e) => handleLibJobChange(e.target.value)}
+                  style={s.select}
+                >
+                  <option value="">Select a completed job…</option>
+                  {libJobs.map((j) => (
+                    <option key={j.job_id} value={j.job_id}>
+                      {j.pipeline_id ?? "HLA"} · {new Date(j.created_at).toLocaleDateString()}
+                    </option>
+                  ))}
+                </select>
+                {libFiles.length > 0 && (
+                  <>
+                    <div style={{ ...s.fieldLabel, marginTop: 6 }}>Select file</div>
+                    <select
+                      value={libSelectedFile}
+                      onChange={(e) => setLibSelectedFile(e.target.value)}
+                      style={s.select}
+                    >
+                      <option value="">Choose output file…</option>
+                      {libFiles.map((f) => (
+                        <option key={f.path} value={f.path}>{f.name}</option>
+                      ))}
+                    </select>
+                  </>
+                )}
+                {libSelectedFile && (
+                  <button style={{ ...s.uploadBtn, marginTop: 6, borderStyle: "solid" }} onClick={applyLibrarySelection}>
+                    ✓ Use this file
+                  </button>
+                )}
+                {data.datasetId && mode === "library" && (
+                  <div style={{ ...s.datasetHint, color: "#16a34a", marginTop: 4 }}>
+                    ✓ Using: {libFiles.find((f) => f.path === data.datasetId)?.name ?? data.datasetId}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
 
@@ -342,6 +674,14 @@ export function InputFileNode({ id, data }: InputFileNodeProps) {
       </div>
 
       <Handle type="source" position={Position.Right} id="file-out" style={s.handle} />
+      {isPairedEnd && (
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="file-out-r2"
+          style={{ ...s.handle, top: "calc(50% + 14px)" }}
+        />
+      )}
     </div>
   );
 }
@@ -476,6 +816,33 @@ const s: Record<string, React.CSSProperties> = {
     color: "#9ca3af",
     marginTop: 3,
     lineHeight: 1.4,
+  },
+  sraValid: {
+    fontSize: 9,
+    color: "#166534",
+    background: "#f0fdf4",
+    border: "1px solid #bbf7d0",
+    borderRadius: 4,
+    padding: "3px 6px",
+    marginTop: 3,
+  },
+  sraUrl: {
+    fontSize: 9,
+    color: "#1d4ed8",
+    background: "#eff6ff",
+    border: "1px solid #bfdbfe",
+    borderRadius: 4,
+    padding: "3px 6px",
+    marginTop: 3,
+  },
+  sraInvalid: {
+    fontSize: 9,
+    color: "#b45309",
+    background: "#fef3c7",
+    border: "1px solid #fde68a",
+    borderRadius: 4,
+    padding: "3px 6px",
+    marginTop: 3,
   },
   divider: { height: 1, background: "#f0f0f0", margin: "6px 0" },
   fieldLabel: {

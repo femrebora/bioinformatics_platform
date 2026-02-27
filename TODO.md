@@ -1,184 +1,158 @@
 # Bioinformatics Platform — To-Do List
 
-> Status legend: ✅ Done · 🔄 In Progress · 🔲 Not Started · 💡 Idea / Future
+> Status legend: ✅ Done · 🔲 Not Started · 💡 Idea / Future
 
 ---
 
 ## 1. Backend — Pipeline Execution Infrastructure
 
-### 1.1 Real Storage Backend
-- 🔲 **S3 storage backend** (`app/services/storage/s3.py`)
-  - Generate real presigned upload URLs via `boto3`
-  - Store files in S3 so EC2 workers can pull them
-  - Return `s3://bucket/key` paths to the pipeline runner
-  - Config switch: `STORAGE_BACKEND=s3`
+### 1.1 Storage
+- ✅ **Local storage backend** — presigned local upload URLs, stored in `/uploads`
+- ✅ **S3 storage backend** (`services/storage/s3.py`) — real presigned S3 upload URLs via boto3; `STORAGE_BACKEND=s3`
 
-### 1.2 Real Compute Backend
-- 🔲 **AWS EC2 backend** (`app/services/ec2/aws.py`)
-  - Launch spot or on-demand instances via `boto3` based on job tier
-  - Wait for SSH readiness (or use AWS SSM instead of raw SSH)
-  - Mount / pull input file from S3
-  - Terminate instance on completion or failure
-  - Config switch: `EC2_BACKEND=aws`
-- 🔲 **Alternative: ECS/Fargate task runner** — simpler than raw EC2 for containerised tools
-- 🔲 **Alternative: AWS Batch** — purpose-built for bioinformatics batch jobs, handles queuing and spot interruptions automatically
+### 1.2 Compute / Runners
+- ✅ **Mock EC2 backend** — fake spawn/terminate for local dev
+- ✅ **AWS Batch — Nextflow runner** (`services/nextflow/batch.py`) — generates samplesheet CSV, submits `nextflow run nf-core/<pipeline>` job to Batch, polls until done, collects S3 results; `NEXTFLOW_BACKEND=awsbatch`
+- ✅ **Mock Nextflow runner** (`services/nextflow/mock.py`) — per-pipeline deterministic mock results (table/vcf/files)
+- ✅ **AWS Batch — Snakemake runner** (`services/snakemake/batch.py`) — generates Snakefile from workflow_config, runs `snakemake --executor aws-batch`, collects results; `SNAKEMAKE_BACKEND=awsbatch`
+- ✅ **Mock Snakemake runner** (`services/snakemake/mock.py`) — 5–12s delay, BAM/VCF/MultiQC file outputs
+- ✅ **AWS Batch — BioScript runner** (`services/bioscript/batch.py`) — uploads user script to S3, submits single Batch job using `BIOSCRIPT_DOCKER_IMAGE`, polls, collects results; `BIOSCRIPT_BACKEND=awsbatch`
+- ✅ **Mock BioScript runner** (`services/bioscript/mock.py`) — script-keyword-aware fake outputs
+- ✅ **Custom Linux pipelines** (`services/custom/`) — 5 standalone tools not on nf-core/Snakemake: SPAdes (de novo assembly), Kraken2+Bracken (metagenomics), Prokka (annotation), MAFFT+IQ-TREE 2 (phylogenomics), Flye+NanoStat (long-read assembly); `CUSTOM_BACKEND=mock|awsbatch`
+- 🔲 **Real HLA-HD runner** (`services/hla/hlahd.py`) — wrap HLA-HD binary/Docker image; parse result files; `HLA_BACKEND=hlahd`
+- 🔲 **Container pre-warming** — pull Singularity/Docker images before first run to reduce latency
 
-### 1.3 Nextflow / nf-core Pipeline Runner
-- 🔲 **Nextflow runner service** (`app/services/nextflow/`)
-  - Call `nextflow run nf-core/<pipeline>` with `--input samplesheet.csv`
-  - Capture `stdout`/`stderr` and tail `.nextflow.log` for live progress
-  - Parse Nextflow's `trace.txt` for per-process timing
-  - Handle Nextflow resume (`-resume`) to restart failed runs cheaply
-  - Config switch: `NEXTFLOW_BACKEND=nextflow` (mock is ready; real runner is 🔲)
-- ✅ **Mock Nextflow runner** (`app/services/nextflow/mock.py`) — deterministic per-pipeline mock results (table/vcf/files) wired into Celery task routing
-- ✅ **Samplesheet generator** (`app/services/samplesheet.py`) — generates nf-core CSV samplesheets for rnaseq, sarek, atacseq, methylseq, ampliseq, chipseq, fetchngs
-- ✅ **Result parsers** (`app/services/result_parsers.py`) — VCF, count matrix, MultiQC HTML, file list, auto-detect dispatcher
-- 🔲 **Container registry** — pull correct Singularity/Docker containers before running; pre-warm on instance startup to reduce latency
+### 1.3 Samplesheet / Input Generation
+- ✅ **Samplesheet generator** — nf-core CSV for rnaseq, sarek, atacseq, methylseq, ampliseq, chipseq, fetchngs
+- ✅ **Paired-end FASTQ** — R1 + R2 presign + upload, `storage_key_r2` on Job, fills `fastq_2` column in samplesheet
+- 🔲 **SRA / URL input mode** — accept SRA accession (`SRR…`) or HTTPS URL; stream-download on worker via `prefetch` + `fasterq-dump`
 
-### 1.4 Snakemake Pipeline Runner *(future)*
-- 🔲 **Snakemake runner service** (`app/services/snakemake/`)
-  - Call `snakemake --cores N --use-conda` or `--use-singularity`
-  - Support remote execution via Snakemake's built-in AWS/Slurm profiles
-  - Parse `snakemake --summary` for progress tracking
-- 🔲 **Snakemake catalog** — index community Snakemake workflows (Snakemake Wrappers, WorkflowHub) similar to nf-core catalog scraper
-
-### 1.5 Real HLA-HD Runner
-- 🔲 **HLA-HD runner** (`app/services/hla/hlahd.py`)
-  - Wrap HLA-HD binary (or Docker image) with the real analysis
-  - Parse `HLA-HD` result files into the `hla_alleles` JSON structure
-  - Config switch: `HLA_BACKEND=hlahd`
-
-### 1.6 Result Parsers
-- ✅ **MultiQC HTML parser** — wraps HTML as `type: "html_report"` in `result_parsers.py`
-- ✅ **Count matrix parser** — parses `*.tsv` / `*.csv` into `type: "table"` with auto-sniffed delimiter
-- ✅ **VCF parser** — parses VCF lines into `type: "vcf"` variant list (first 500 rows)
+### 1.4 Result Parsers
+- ✅ **MultiQC HTML parser** — wraps HTML as `type: "html_report"`
+- ✅ **Count matrix parser** — parses `*.tsv`/`*.csv` into `type: "table"`, auto-sniffs delimiter
+- ✅ **VCF parser** — parses VCF lines into `type: "vcf"` (first 500 rows)
 - ✅ **Generic file-list result** — `parse_file_list()` returns `type: "files"` with name/path/size/mime
-- 🔲 **Result size limits** — large VCFs / count tables should be stored in S3 and streamed/paginated rather than embedded in the job JSON
+- 🔲 **Result size limits** — large VCFs / count tables streamed/paginated from S3 rather than embedded in job JSON
 
-### 1.7 Job Stage Tracking
-- 🔲 **Fine-grained stage tracking** — surface Nextflow process names as live progress steps instead of the current two-stage (ec2_starting / hla_running) model
-- 🔲 **Log streaming** — WebSocket or SSE endpoint so the frontend can show live `nextflow.log` output in the Results panel
-- 🔲 **Job cancellation** — `DELETE /api/v1/jobs/{id}` endpoint that kills the running Nextflow/EC2 process and terminates the instance
+### 1.5 Job Lifecycle
+- ✅ **Job routing** — `pipeline_id=None` → HLA; `"snakemake"` → Snakemake; `"bioscript"` → BioScript; `"custom-{tool}"` → CustomRunner; `"mixed"` → Nextflow then Snakemake; other → Nextflow
+- ✅ **Job cancellation** — `DELETE /api/v1/jobs/{id}`; revokes Celery task (SIGTERM); marks status `"cancelled"`
+- ✅ **Job retry** — `POST /api/v1/jobs/{id}/retry`; copies failed/cancelled job fields; creates new pending job; ↺ Retry button in JobHistory
+- ✅ **AWS Batch job cancellation** — `services/batch_tracker.py` stores Batch job ID in Redis; cancel endpoint calls `batch.terminate_job()` for BioScript and Custom runners
+- 🔲 **Fine-grained stage tracking** — surface Nextflow process names as live steps instead of two-stage model
+- ✅ **Log streaming** — `GET /api/v1/jobs/{id}/logs?offset=N` polling endpoint backed by Redis; pipeline task emits stage log lines; `JobProgress` live log pane (dark terminal, auto-scroll, Show/Hide toggle)
+- 🔲 **Notifications** — email or Slack webhook when a long-running job finishes or fails
 
 ---
 
 ## 2. Frontend — Pipeline Builder
 
-### 2.1 Canvas & Validation
-- ✅ Validation only shows HLA errors when HLA nodes are present
-- ✅ nf-core canvas: unconnected InputFileNode no longer shows HLA warnings
-- 🔲 **Run button context** — when running a pure nf-core pipeline, route the job to the Nextflow runner instead of HLA runner (requires backend routing by pipeline type)
-- 🔲 **Pipeline type badge** — display "HLA" / "nf-core" / "Snakemake" / "Mixed" badge in toolbar based on canvas content
+### 2.1 Canvas & Nodes
+- ✅ **Drag-drop canvas** (React Flow v12) with palette sidebar
+- ✅ **Node types**: InputFile, HLA-HD Typing, FASTQ→BAM, Results, nf-core Module, nf-core Pipeline, Snakemake Wrapper, Snakemake Workflow, BioScript, Custom Pipeline (teal, 5 tools)
+- ✅ **Connection validation** (`isValidConnection`) — port-type aware, cross-framework rules
+- ✅ **Auto-wiring** — greedy bipartite matching + topological DAG layout
+- ✅ **Undo / redo** — 50-step snapshot stack (Ctrl+Z / Ctrl+Shift+Z)
+- ✅ **Keyboard shortcuts** — Ctrl+S save, Ctrl+Z/Y undo/redo, Ctrl+K spotlight
+- ✅ **Pipeline type badge** — HLA / nf-core / Snakemake / BioScript / Custom / Mixed
+- ✅ **Pipeline templates** — 8 one-click starter templates + gallery modal
+- ✅ **Cmd+K spotlight** — command palette with template search + nf-core/Snakemake catalog search
+- 🔲 **Module parameter panel** — click a module → side panel showing `nextflow.config` params with inline editing
+- 🔲 **Module version pinning** — select a specific nf-core module tag/version
+- 🔲 **Subworkflow nodes** — nf-core subworkflows as collapsible composite nodes
+- 🔲 **Dark mode** — respect `prefers-color-scheme`
 
 ### 2.2 Input File Node
-- ✅ File upload widget with progress indicator
-- ✅ Dataset ID / storage-key input mode
-- 🔲 **Multi-file upload** — nf-core pipelines often need paired FASTQ (R1 + R2); allow uploading two files and auto-generate the samplesheet
-- 🔲 **URL / SRA input mode** — accept an SRA accession (e.g. `SRR12345678`) and stream-download on the EC2 worker via `prefetch` + `fasterq-dump`
-- 🔲 **Dataset library** — persist uploaded files so users can re-select them without re-uploading (dropdown of past uploads)
+- ✅ **File upload widget** with upload-progress indicator
+- ✅ **Dataset ID / storage-key input mode** — type a storage key directly
+- ✅ **Paired-end toggle** — R1 + R2 upload slots with `file-out-r2` handle
+- 🔲 **SRA / URL input mode** — accept SRA accession or download URL
+- 🔲 **Dataset library** — dropdown of past uploads so users can re-select without re-uploading
 
-### 2.3 nf-core Module Nodes
-- ✅ Auto-wiring with pattern-overlap and port-stem matching
-- ✅ Topological DAG layout with grid fallback
-- 🔲 **Module parameter panel** — click a module to open a side panel showing its `nextflow.config` params with inline editing
-- 🔲 **Module version pinning** — allow selecting a specific nf-core module tag/version
-- 🔲 **Subworkflow nodes** — nf-core subworkflows (e.g. `BAM_SORT_STATS_SAMTOOLS`) should be collapsible composite nodes
+### 2.3 Results Node & Results Panel
+- ✅ **Sliding results panel** — side drawer ↔ centre modal with Summary / Data / Downloads / Raw tabs
+- ✅ **HLA alleles** — locus-colour-coded cards, Class I / II grouping, bar chart
+- ✅ **VCF** — stat cards, donut chart, sortable/filterable table
+- ✅ **Generic table** — sortable, searchable, paginated
+- ✅ **File list** — file name / size / mime type renderer
+- ✅ **Volcano plot** — SVG scatter for DE tables (up/down/ns colouring)
+- ✅ **HTML report** — summary with View Report button (MultiQC, Snakemake report, etc.)
+- ✅ **Download** — JSON / TSV / clipboard; per-file presigned S3 ⬇ button on file list (calls `GET /jobs/{id}/download?path=s3://…`)
+- 🔲 **MultiQC inline iframe** — render MultiQC HTML in the Data tab instead of new tab
+- 🔲 **IGV.js integration** — embed IGV.js for BAM / VCF result navigation
+- 🔲 **Log viewer tab** — stream `nextflow.log` in a dark terminal pane
+- 🔲 **Result sharing** — shareable read-only link to a result
 
-### 2.4 Results Node & Results Panel
-- ✅ Smart output hints from connected module port patterns
-- ✅ "View Results" button + download shortcut on node
-- ✅ Sliding results panel (side drawer ↔ center modal) with Summary / Data / Downloads / Raw tabs
-- ✅ HLA alleles: locus-color-coded cards, Class I / II grouping, bar chart
-- ✅ VCF: stat cards, donut chart, sortable/filterable table
-- ✅ Generic table: sortable, searchable, paginated
-- ✅ Download as JSON / TSV / clipboard
-- 🔲 **MultiQC iframe viewer** — render MultiQC HTML reports in the Data tab
-- 🔲 **IGV.js integration** — for BAM / VCF results, embed IGV.js genome browser in the Results panel
-- 🔲 **Volcano / MA plot** — for RNA-seq differential expression results, render D3 or Vega-Lite plot
-- 🔲 **Log viewer tab** — stream `nextflow.log` in a dark-mode terminal pane within the Results panel
-- 🔲 **Result sharing** — generate a shareable read-only link to a result (requires auth)
-
-### 2.5 Snakemake Module Nodes *(future)*
-- 🔲 **Snakemake node type** — `snakemakeRule` node rendered with a snake icon and distinct colour scheme
-- 🔲 **Mixed pipeline canvas** — allow connecting nf-core output ports → Snakemake input wildcards on the same canvas, with cross-framework edge validation
-- 🔲 **Snakemake palette section** — catalog panel section for Snakemake Wrappers alongside nf-core modules
-
-### 2.6 Built-in Custom Modules *(future)*
-- 🔲 **Built-in module type** (`builtinTool` node) — curated set of common tools (FastQC, MultiQC, Trimmomatic, STAR, DESeq2, …) with pre-configured parameters
-- 🔲 **Built-in module catalog** — separate palette section "Built-in Tools" above nf-core Modules
-- 🔲 **Script node** — drop in a Python/R/Bash code block node; backend runs it in a container on the worker instance
+### 2.4 BioScript Node
+- ✅ **BioScript node** — violet, expandable textarea code editor, pre-loaded with `bioplatform_*` helper signatures
+- ✅ **Custom Pipeline node** — teal (#0d9488), 5-tool dropdown (spades/kraken2/prokka/iqtree/flye), `custom-in`/`custom-out` handles
+- ✅ **Shell helper library** (`bioplatform_helpers.sh`) — QC, align, STAR, variant call, featureCount, MultiQC, S3 sync; custom: spades, kraken2, prokka, iqtree, flye
+- ✅ **Custom Docker image** (`Dockerfile.tools`) — samtools, bwa, fastp, bcftools, STAR, featureCounts, MultiQC, SPAdes, Kraken2, Bracken, Prokka, MAFFT, IQ-TREE 2, Flye, NanoStat
 
 ---
 
-## 3. User Accounts & Multi-tenancy
+## 3. Catalogs
 
-- 🔲 **Authentication** — JWT or OAuth2 (GitHub / Google) login; protect all API endpoints
-- 🔲 **Per-user storage namespacing** — uploads and results scoped to `user_id`
-- 🔲 **Pipeline sharing** — mark a saved pipeline as public or share with specific users
-- 🔲 **Organisation / team workspaces** — share pipelines and result history within a team
-
----
-
-## 4. Job Management
-
-- 🔲 **Job history page** — list all past jobs with status, cost, runtime, pipeline used
-- 🔲 **Job retry** — one-click re-run a failed job with the same input and parameters
-- 🔲 **Job cancellation** — cancel a running job from both the builder canvas and the history page
-- 🔲 **Cost tracking** — accumulate real AWS costs per job and surface a monthly spend summary
-- 🔲 **Notifications** — email or Slack webhook when a long-running job finishes or fails
-
----
-
-## 5. nf-core / Snakemake Catalog
-
-- ✅ nf-core pipeline + module catalog scraped from GitHub
-- ✅ `input_formats` scraped from `assets/schema_input.json` per pipeline
+- ✅ **nf-core pipelines** — scraped from GitHub; `input_formats` from `schema_input.json`
+- ✅ **nf-core modules** — scraped from GitHub with meta.yml parsing
+- ✅ **Snakemake wrappers** — 454 wrappers scraped from `snakemake/snakemake-wrappers`
+- ✅ **Snakemake workflows** — 4700+ community workflows from `snakemake-workflow-catalog`
 - 🔲 **Incremental refresh** — re-scrape only pipelines/modules updated since `last_scraped`
-- 🔲 **Snakemake Wrappers catalog** — scrape https://snakemake-wrappers.readthedocs.io
 - 🔲 **WorkflowHub catalog** — index CWL / Snakemake / Nextflow workflows from workflowhub.eu
-- 🔲 **Module search ranking** — rank search results by star count + usage frequency
-- 🔲 **Changelog / version info** — show latest release tag and changelog link for each pipeline
+- 🔲 **Module search ranking** — rank by star count + usage frequency
+- 🔲 **Changelog / version info** — show latest release tag + changelog link per pipeline
+
+---
+
+## 4. User Accounts & History
+
+- ✅ **Authentication** — JWT register/login, all API endpoints protected; `AuthGate` component
+- ✅ **Per-user job scoping** — uploads and job list filtered by `user_id`
+- ✅ **Job history page** — table of past 50 jobs with status, pipeline, tier, cost, timestamp
+- ✅ **Job cancellation from history** — Cancel button on pending/running rows
+- ✅ **Job retry from history** — ↺ Retry button on failed/cancelled rows; creates new job with same inputs
+- 🔲 **Pipeline sharing** — mark a saved pipeline as public or share with specific users
+- 🔲 **Organisation / team workspaces**
+- 🔲 **Cost tracking** — accumulate real AWS costs per job; monthly spend dashboard
+- 🔲 **Result sharing** — shareable read-only links
+
+---
+
+## 5. Payments
+
+- ✅ **Stripe Checkout** — cost estimate before every run, redirects to Stripe hosted page
+- ✅ **Stripe webhook** — `checkout.session.completed` creates job and dispatches Celery task
+- ✅ **Redis metadata store** — `workflow_config` stored in Redis (1h TTL) to work around Stripe's 500-char metadata limit
+- ✅ **Session polling** — `/payments/session/{id}` polls for `job_id` after Stripe redirect
 
 ---
 
 ## 6. Infrastructure & DevOps
 
-- 🔲 **Terraform / CDK** — infrastructure-as-code for VPC, S3 buckets, IAM roles, RDS, Redis, ECS
-- 🔲 **CI/CD pipeline** — GitHub Actions: lint → test → build Docker images → push to ECR → deploy
-- 🔲 **Staging environment** — mirror of production with mock backends for safe testing
-- 🔲 **Database migrations** — Alembic migrations run automatically on deploy (already partially done)
-- 🔲 **Secrets management** — move AWS credentials / DB passwords to AWS Secrets Manager or Vault
-- 🔲 **Rate limiting** — per-IP and per-user rate limits on API endpoints
-- 🔲 **Health checks** — `/health` endpoint for load-balancer and monitoring
-- 🔲 **Horizontal scaling** — multiple Celery workers behind SQS or Redis for job parallelism
+- ✅ **Docker Compose** — postgres, redis, backend, worker, frontend
+- ✅ **Alembic migrations** — 0001–0009, run automatically at startup
+- ✅ **Health check endpoint** — `GET /health`
+- ✅ **CORS** — configurable via `ALLOWED_ORIGINS`
+- ✅ **Terraform** — `terraform/` with main.tf, variables.tf, s3.tf, iam.tf, batch.tf (SPOT compute env + 2 queues), ecr.tf, outputs.tf; `terraform apply` provisions full AWS infra
+- ✅ **CI/CD pipeline** — `.github/workflows/ci.yml` (ruff + mypy + pytest + tsc + eslint + build on PR); `.github/workflows/deploy.yml` (ECR push + Alembic migration + S3+CloudFront deploy on main)
+- ✅ **Rate limiting** — slowapi (`app/limiter.py`); global 200 req/min; auth register 5/min, login 10/min, job create 20/min
+- 🔲 **Secrets management** — move credentials to AWS Secrets Manager / Vault
+- 🔲 **Horizontal scaling** — multiple Celery workers behind Redis
+- 🔲 **Staging environment** — mock-backend mirror of production for safe testing
 
 ---
 
 ## 7. Testing
 
-- 🔲 **Backend unit tests** — pytest for services (mock runner, storage, scraper)
-- 🔲 **API integration tests** — pytest + httpx for all CRUD endpoints
-- 🔲 **Frontend component tests** — Vitest + React Testing Library for node components and validation logic
-- 🔲 **E2E tests** — Playwright: build a pipeline → upload file → run → verify results panel opens
-- 🔲 **Scraper tests** — snapshot tests for nf-core meta.yml parsing (old + new format)
+- ✅ **Backend API integration tests** — `tests/` with pytest + httpx AsyncClient; SQLite in-memory DB; tests for health, auth (register/login/me), jobs (CRUD, cancel, retry), pipelines (CRUD)
+- ✅ **Backend service unit tests** — `test_cost_estimator.py`, `test_result_parsers.py`, `test_mock_runners.py`, `test_storage.py`, `test_samplesheet.py`; 154 tests, all green in <2 s
+- 🔲 **Frontend component tests** — Vitest + React Testing Library for nodes + validation
+- 🔲 **E2E tests** — Playwright: build pipeline → upload → run → verify results panel
 
 ---
 
 ## 8. UX / Accessibility
 
-- ✅ **Keyboard shortcuts** — `Ctrl+S` save, `Ctrl+Z` undo, `Ctrl+Shift+Z`/`Ctrl+Y` redo, `Ctrl+K` spotlight
-- ✅ **Undo / redo** — 50-step snapshot stack (`useUndoRedo.ts`) with toolbar buttons
-- ✅ **Node search / spotlight** — `Cmd+K` opens command palette (commands + templates + nf-core API search)
-- 🔲 **Dark mode** — respect `prefers-color-scheme`; all inline styles already use CSS-var-ready values
-- 🔲 **Mobile / tablet layout** — results panel and palette collapse to bottom sheet on small screens
-- 🔲 **Onboarding tour** — interactive walkthrough for first-time users (drag a node, connect, run)
-- ✅ **Pipeline templates** — 8 one-click starter templates (HLA, RNA-seq, Sarek, ATAC-seq, ChIP-seq, Methylation, Amplicon, FetchNGS) with template gallery modal
-
----
-
-## 9. Documentation
-
-- 🔲 **API reference** — auto-generated OpenAPI docs (FastAPI `/docs` is already there; customise it)
-- 🔲 **User guide** — how to build a pipeline, upload data, interpret results
-- 🔲 **Developer guide** — how to add a new node type, new backend, new result renderer
-- 🔲 **Architecture diagram** — system overview (frontend → API → Celery → EC2 → results)
+- 🔲 **Onboarding tour** — interactive walkthrough for first-time users
+- 🔲 **Mobile / tablet layout** — results panel + palette collapse to bottom sheet
+- 🔲 **Accessible colour contrast** — audit inline colours for WCAG AA compliance

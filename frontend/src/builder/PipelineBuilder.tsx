@@ -19,8 +19,14 @@ import { ResultsNode } from "./nodes/ResultsNode";
 import { FastqToBamNode } from "./nodes/FastqToBamNode";
 import { NfCoreModuleNode } from "./nodes/NfCoreModuleNode";
 import { NfCorePipelineNode } from "./nodes/NfCorePipelineNode";
+import { SnakemakeWrapperNode } from "./nodes/SnakemakeWrapperNode";
+import { SnakemakeWorkflowNode } from "./nodes/SnakemakeWorkflowNode";
+import { BioScriptNode } from "./nodes/BioScriptNode";
+import { CustomPipelineNode } from "./nodes/CustomPipelineNode";
+import { SampleSheetNode } from "./nodes/SampleSheetNode";
 import { NodePalette } from "./NodePalette";
 import { PipelineToolbar } from "./PipelineToolbar";
+import { ParameterPanel } from "./ParameterPanel";
 import { Spotlight } from "./Spotlight";
 import { TemplateGallery } from "./TemplateGallery";
 import { validatePipeline, patternsOverlap } from "./validation";
@@ -34,6 +40,7 @@ import type { GraphData } from "../types/pipeline";
 import type { Job, PresignResponse } from "../types/job";
 import type { TierConfirmProps } from "../components/TierConfirm";
 import type { NfCoreModule, NfCorePipeline } from "../types/nfcore";
+import type { SnakemakeWrapper } from "../types/snakemake";
 import type { InputFileNodeData } from "./nodes/InputFileNode";
 
 // ── Auto-wiring helpers (pure functions, outside component) ───────────────
@@ -212,11 +219,82 @@ const nodeTypes: NodeTypes = {
   results: ResultsNode,
   nfcoreModule: NfCoreModuleNode,
   nfcorePipeline: NfCorePipelineNode,
+  snakemakeWrapper: SnakemakeWrapperNode,
+  snakemakeWorkflow: SnakemakeWorkflowNode,
+  bioScript: BioScriptNode,
+  customPipeline: CustomPipelineNode,
+  sampleSheetBuilder: SampleSheetNode,
 };
 
 let nodeCounter = 0;
 function makeId(prefix: string) {
   return `${prefix}-${++nodeCounter}`;
+}
+
+/**
+ * Derive the pipeline_id to pass to the job runner from the current canvas nodes.
+ * - nf-core (any) + Snakemake (any) → "mixed"  (cross-framework, two-phase run)
+ * - NfCorePipelineNode alone → its pipelineId (e.g. "rnaseq")
+ * - Only Snakemake nodes → "snakemake"
+ * - Only nf-core modules → "nf-core-modules"
+ * - HLA-only → null (handled by HLA runner)
+ */
+function derivePipelineId(nodes: Node[]): string | null {
+  const nfcPipe = nodes.find((n) => n.type === "nfcorePipeline");
+  const hasSmk = nodes.some((n) => n.type === "snakemakeWrapper" || n.type === "snakemakeWorkflow");
+  const hasNfcModules = nodes.some((n) => n.type === "nfcoreModule");
+  const hasNfc = !!nfcPipe || hasNfcModules;
+  const hasBioScript = nodes.some((n) => n.type === "bioScript");
+  const customNode = nodes.find((n) => n.type === "customPipeline");
+
+  if (hasBioScript) return "bioscript";
+  if (customNode && !hasNfc && !hasSmk && !hasBioScript) {
+    const tool = (customNode.data as { tool: string }).tool ?? "spades";
+    return `custom-${tool}`;
+  }
+  if (hasNfc && hasSmk) return "mixed";
+  if (nfcPipe) return (nfcPipe.data as { pipelineId: string }).pipelineId;
+  if (hasSmk) return "snakemake";
+  if (hasNfcModules) return "nf-core-modules";
+  return null;
+}
+
+function deriveWorkflowConfig(nodes: Node[]): unknown | null {
+  // BioScript: collect the script from the first BioScript node
+  const bioScriptNode = nodes.find((n) => n.type === "bioScript");
+  if (bioScriptNode) {
+    const d = bioScriptNode.data as { script?: string };
+    return { mode: "bioscript", script: d.script ?? "" };
+  }
+
+  // Snakemake: collect wrappers and community workflows
+  const wrappers = nodes
+    .filter((n) => n.type === "snakemakeWrapper")
+    .map((n) => (n.data as { label: string }).label);
+  const workflows = nodes
+    .filter((n) => n.type === "snakemakeWorkflow")
+    .map((n) => (n.data as { workflowId: string }).workflowId);
+  if (wrappers.length > 0 || workflows.length > 0) {
+    return { wrappers, workflows };
+  }
+
+  // nf-core pipeline: carry genome, params, and multi-sample samplesheet
+  const nfcPipe = nodes.find((n) => n.type === "nfcorePipeline");
+  if (nfcPipe) {
+    type PipeData = { genome?: string; params?: Record<string, unknown> };
+    const d = nfcPipe.data as PipeData;
+    const sampleSheetNode = nodes.find((n) => n.type === "sampleSheetBuilder");
+    const samples = sampleSheetNode
+      ? (sampleSheetNode.data as { samples?: unknown[] }).samples ?? []
+      : [];
+    const config: Record<string, unknown> = {};
+    if (d.genome) config.genome = d.genome;
+    if (d.params && Object.keys(d.params).length > 0) config.params = d.params;
+    if (samples.length > 0) config.samples = samples;
+    return Object.keys(config).length > 0 ? config : null;
+  }
+
+  return null;
 }
 
 const DEFAULT_NODES: Node[] = [
@@ -262,9 +340,19 @@ interface PipelineBuilderProps {
     presign: PresignResponse,
     filename: string,
     fileType: string,
-    pipelineId: string | null
+    pipelineId: string | null,
+    storageKeyR2?: string | null,
+    workflowConfig?: unknown | null,
+    nSamples?: number,
   ) => void;
-  confirmingState: null | { presign: PresignResponse; filename: string };
+  confirmingState: null | {
+    presign: PresignResponse;
+    filename: string;
+    pipelineId: string | null;
+    storageKeyR2?: string | null;
+    workflowConfig?: unknown | null;
+    nSamples?: number;
+  };
   TierConfirmComponent: React.ComponentType<TierConfirmProps>;
   onConfirm: (tier: import("../types/job").Tier, cost: number) => void;
   onCancelConfirm: () => void;
@@ -287,6 +375,7 @@ export function PipelineBuilder({
   const [saving, setSaving] = useState(false);
   const [spotlightOpen, setSpotlightOpen] = useState(false);
   const [galleryOpen,   setGalleryOpen]   = useState(false);
+  const [paramPanel, setParamPanel] = useState<{ nodeId: string; pipelineId: string } | null>(null);
 
   const { push: pushHistory, undo, redo, canUndo, canRedo } = useUndoRedo();
 
@@ -407,6 +496,18 @@ export function PipelineBuilder({
     return () => window.removeEventListener("keydown", handler);
   }, []); // registers once; always calls latest via actionsRef
 
+  // ── Parameter panel event listener ───────────────────────────────────────
+  useEffect(() => {
+    function handler(e: Event) {
+      const { nodeId, pipelineId } = (e as CustomEvent).detail as { nodeId: string; pipelineId: string };
+      setParamPanel((prev) =>
+        prev?.nodeId === nodeId ? null : { nodeId, pipelineId }
+      );
+    }
+    window.addEventListener("openParamPanel", handler);
+    return () => window.removeEventListener("openParamPanel", handler);
+  }, []);
+
   // ── Template apply ───────────────────────────────────────────────────────
 
   function applyTemplate(template: PipelineTemplate) {
@@ -468,6 +569,27 @@ export function PipelineBuilder({
     ]);
   }
 
+  function handleSpotlightAddWrapper(wrapper: SnakemakeWrapper) {
+    pushHistory({ nodes: nodesRef.current, edges: edgesRef.current });
+    setNodes((nds) => [
+      ...nds,
+      {
+        id: makeId("smkwrap"),
+        type: "snakemakeWrapper",
+        position: canvasCenter(),
+        data: {
+          label:        wrapper.id,
+          tool:         wrapper.tool,
+          subcommand:   wrapper.subcommand,
+          description:  wrapper.description,
+          category:     wrapper.category,
+          input_names:  wrapper.input_names,
+          output_names: wrapper.output_names,
+        },
+      },
+    ]);
+  }
+
   // ── Spotlight command handler ─────────────────────────────────────────────
 
   function handleSpotlightCommand(id: string) {
@@ -520,6 +642,28 @@ export function PipelineBuilder({
     // nfc-in from built-in source) — allow freely
     if (sh.startsWith("nfc-") || th.startsWith("nfc-")) return true;
 
+    // Snakemake wrapper-to-wrapper (named ports)
+    if (sh.startsWith("smk-out-") && th.startsWith("smk-in-")) return true;
+    // SampleSheetBuilder → nf-core pipeline
+    if (sh === "samplesheet-out" && th === "nfc-in-data") return true;
+
+    // InputFile → Snakemake workflow
+    if (sh === "file-out" && th === "smk-in-data") return true;
+    // Snakemake workflow → Results
+    if (sh === "smk-out-results" && th === "result-in") return true;
+    // Cross-framework: any remaining smk- handles — permissive
+    if (sh.startsWith("smk-") || th.startsWith("smk-")) return true;
+
+    // BioScript connections
+    if (sh === "file-out" && th === "bioscript-in") return true;
+    if (sh === "file-out-r2" && th === "bioscript-in") return true;
+    if (sh === "bioscript-out" && th === "result-in") return true;
+
+    // Custom Linux pipeline connections
+    if (sh === "file-out" && th === "custom-in") return true;
+    if (sh === "file-out-r2" && th === "custom-in") return true;
+    if (sh === "custom-out" && th === "result-in") return true;
+
     // Strict rules for built-in-only connections
     const validPairs = [
       { source: "file-out",   target: "file-in"   }, // Input → HLA (direct)
@@ -551,10 +695,17 @@ export function PipelineBuilder({
     const extraData = nodeDataStr ? JSON.parse(nodeDataStr) : {};
 
     const defaultData: Record<string, unknown> =
-      nodeType === "nfcoreModule" || nodeType === "nfcorePipeline"
+      nodeType === "nfcoreModule" || nodeType === "nfcorePipeline" ||
+      nodeType === "snakemakeWrapper" || nodeType === "snakemakeWorkflow"
         ? extraData
         : nodeType === "inputFile"
         ? { label: "Input File", fileType: "fastq" }
+        : nodeType === "sampleSheetBuilder"
+        ? { label: "Sample Sheet", samples: [] }
+        : nodeType === "bioScript"
+        ? { label: "BioScript", script: "" }
+        : nodeType === "customPipeline"
+        ? { label: "De Novo Assembly", tool: "spades" }
         : nodeType === "fastqToBam"
         ? { label: "FASTQ → BAM" }
         : nodeType === "hlaTyping"
@@ -566,8 +717,18 @@ export function PipelineBuilder({
         ? "nfmod"
         : nodeType === "nfcorePipeline"
         ? "nfpipe"
+        : nodeType === "snakemakeWrapper"
+        ? "smkwrap"
+        : nodeType === "snakemakeWorkflow"
+        ? "smkflow"
         : nodeType === "inputFile"
         ? "input"
+        : nodeType === "sampleSheetBuilder"
+        ? "samplesheet"
+        : nodeType === "bioScript"
+        ? "bioscript"
+        : nodeType === "customPipeline"
+        ? "custom"
         : nodeType === "fastqToBam"
         ? "converter"
         : nodeType === "hlaTyping"
@@ -690,11 +851,18 @@ export function PipelineBuilder({
   // Compute pipeline type badge from canvas node types.
   const pipelineType = useMemo(() => {
     const types = new Set(nodes.map((n) => n.type));
-    const hasHla = types.has("hlaTyping") || types.has("fastqToBam");
-    const hasNfc = types.has("nfcorePipeline") || types.has("nfcoreModule");
-    if (hasHla && hasNfc) return "Mixed";
-    if (hasHla) return "HLA";
-    if (hasNfc) return "nf-core";
+    const hasHla    = types.has("hlaTyping") || types.has("fastqToBam");
+    const hasNfc    = types.has("nfcorePipeline") || types.has("nfcoreModule");
+    const hasSmk    = types.has("snakemakeWrapper") || types.has("snakemakeWorkflow");
+    const hasBs     = types.has("bioScript");
+    const hasCustom = types.has("customPipeline");
+    const count = (hasHla ? 1 : 0) + (hasNfc ? 1 : 0) + (hasSmk ? 1 : 0) + (hasBs ? 1 : 0) + (hasCustom ? 1 : 0);
+    if (count > 1) return "Mixed";
+    if (hasBs)     return "BioScript";
+    if (hasCustom) return "Custom";
+    if (hasSmk)    return "Snakemake";
+    if (hasHla)    return "HLA";
+    if (hasNfc)    return "nf-core";
     return "";
   }, [nodes]);
 
@@ -708,10 +876,17 @@ export function PipelineBuilder({
     if (!valid) return;
 
     const d = inputNodeData;
+    const pipelineId = derivePipelineId(nodesRef.current);
+    const workflowConfig = deriveWorkflowConfig(nodesRef.current);
+    const ssNode = nodesRef.current.find((n) => n.type === "sampleSheetBuilder");
+    const nSamples = ssNode
+      ? ((ssNode.data as { samples?: unknown[] }).samples?.length ?? 1)
+      : 1;
 
     // 1. Pre-uploaded via the node upload widget
     if (d?.inputMode !== "dataset" && d?.presign && d?.uploadedFilename) {
-      onRunRequested(d.presign, d.uploadedFilename, d.fileType ?? "fastq", activePipelineId);
+      const storageKeyR2 = d.pairedEnd ? (d.presignR2?.storage_key ?? null) : null;
+      onRunRequested(d.presign, d.uploadedFilename, d.fileType ?? "fastq", pipelineId, storageKeyR2, workflowConfig, nSamples);
       return;
     }
 
@@ -725,11 +900,30 @@ export function PipelineBuilder({
         tier_rationale: "Dataset ID provided — select compute tier manually.",
       };
       const name = d.datasetId.trim().split("/").pop() || "dataset";
-      onRunRequested(synth, name, d.fileType ?? "fastq", activePipelineId);
+      onRunRequested(synth, name, d.fileType ?? "fastq", pipelineId, null, workflowConfig, nSamples);
       return;
     }
 
-    // 3. Fall back: open file picker in toolbar (original behaviour)
+    // 3. SRA accession or direct URL — worker downloads the data
+    if (d?.inputMode === "sra" && d?.sraValue?.trim()) {
+      const raw = d.sraValue.trim();
+      const isSra = /^[SDE]RR\d{6,}$/.test(raw) || /^(PRJNA|PRJEB|PRJDB|SRS|ERS|DRS|SRX|ERX|DRX)\d+$/.test(raw);
+      const synth: PresignResponse = {
+        upload_url: "",
+        storage_key: raw,
+        recommended_tier: "medium",
+        estimated_cost_usd: isSra ? 0.50 : 1.20,
+        tier_rationale: isSra
+          ? "SRA accession — data will be downloaded from NCBI by the worker."
+          : "URL provided — file will be fetched by the worker.",
+      };
+      const name = isSra ? raw : raw.split("/").pop() || "remote-file";
+      const fileType = isSra ? "fastq" : (d.fileType ?? "fastq");
+      onRunRequested(synth, name, fileType, pipelineId, null, workflowConfig, nSamples);
+      return;
+    }
+
+    // 4. Fall back: open file picker in toolbar (original behaviour)
     fileInputRef.current?.click();
   }
 
@@ -740,11 +934,17 @@ export function PipelineBuilder({
 
     const inputNode = nodes.find((n) => n.type === "inputFile");
     const fileType = (inputNode?.data as { fileType?: string })?.fileType ?? "fastq";
+    const pipelineId = derivePipelineId(nodesRef.current);
+    const workflowConfig = deriveWorkflowConfig(nodesRef.current);
+    const ssNode2 = nodesRef.current.find((n) => n.type === "sampleSheetBuilder");
+    const nSamples2 = ssNode2
+      ? ((ssNode2.data as { samples?: unknown[] }).samples?.length ?? 1)
+      : 1;
 
     try {
       const presign = await presignUpload(file.name, file.size);
       await uploadFile(presign.upload_url, file);
-      onRunRequested(presign, file.name, fileType, activePipelineId);
+      onRunRequested(presign, file.name, fileType, pipelineId, null, workflowConfig, nSamples2);
     } catch {
       // upload errors surface via App error phase
     }
@@ -805,6 +1005,10 @@ export function PipelineBuilder({
           <TierConfirmComponent
             presign={confirmingState.presign}
             filename={confirmingState.filename}
+            pipelineId={confirmingState.pipelineId}
+            storageKeyR2={confirmingState.storageKeyR2}
+            workflowConfig={confirmingState.workflowConfig}
+            initialNSamples={confirmingState.nSamples}
             onConfirm={onConfirm}
             onCancel={onCancelConfirm}
           />
@@ -826,6 +1030,7 @@ export function PipelineBuilder({
           onTemplate={applyTemplate}
           onAddModule={handleSpotlightAddModule}
           onAddPipeline={handleSpotlightAddPipeline}
+          onAddWrapper={handleSpotlightAddWrapper}
         />
       )}
 
@@ -835,6 +1040,12 @@ export function PipelineBuilder({
           onSelect={applyTemplate}
         />
       )}
+
+      <ParameterPanel
+        nodeId={paramPanel?.nodeId ?? null}
+        pipelineId={paramPanel?.pipelineId ?? null}
+        onClose={() => setParamPanel(null)}
+      />
     </div>
   );
 }

@@ -8,8 +8,44 @@
  * Triggered by custom DOM event "openResultsPanel" from anywhere in the app.
  * Close via the × button or by clicking the backdrop (center mode only).
  */
-import { useState } from "react";
-import type { Job, JobResult, HLAAllele, VcfVariant } from "../types/job";
+import { useState, useEffect } from "react";
+import { getDownloadUrl, getVcfPage } from "../api/client";
+import type { Job, JobResult, HLAAllele, VcfVariant, Provenance } from "../types/job";
+
+// ── File type helpers ──────────────────────────────────────────────────────
+
+function fileIcon(mime: string | undefined, name: string): string {
+  const n = name.toLowerCase();
+  if (n.endsWith(".html") || n.endsWith(".htm")) return "📊";
+  if (n.endsWith(".bam") || n.endsWith(".cram")) return "🧬";
+  if (n.endsWith(".bai") || n.endsWith(".crai")) return "📑";
+  if (n.endsWith(".vcf") || n.endsWith(".vcf.gz") || n.endsWith(".bcf")) return "🔬";
+  if (n.endsWith(".fastq") || n.endsWith(".fastq.gz") || n.endsWith(".fq.gz")) return "🧪";
+  if (n.endsWith(".fasta") || n.endsWith(".fa") || n.endsWith(".fna")) return "🔗";
+  if (n.endsWith(".gff") || n.endsWith(".gff3") || n.endsWith(".gtf")) return "🗺️";
+  if (n.endsWith(".tsv") || n.endsWith(".csv")) return "📋";
+  if (n.endsWith(".log") || n.endsWith(".txt")) return "📝";
+  if (n.endsWith(".gz") || n.endsWith(".tar.gz") || n.endsWith(".zip")) return "📦";
+  if (n.endsWith(".bigwig") || n.endsWith(".bw")) return "📈";
+  if (n.endsWith(".bed") || n.endsWith(".narrowpeak") || n.endsWith(".broadpeak")) return "🗃️";
+  if (n.endsWith(".nwk") || n.endsWith(".newick")) return "🌿";
+  if (n.endsWith(".svg")) return "🖼️";
+  if (mime?.includes("html")) return "📊";
+  if (mime?.includes("octet-stream")) return "💾";
+  return "📄";
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
+  return `${(n / 1073741824).toFixed(1)} GB`;
+}
+
+function isHtmlFile(f: { name: string; mime_type?: string }): boolean {
+  return f.name.toLowerCase().endsWith(".html") || f.name.toLowerCase().endsWith(".htm")
+    || (f.mime_type ?? "").includes("html");
+}
 
 // ── DE table detection & Volcano plot ─────────────────────────────────────
 
@@ -32,6 +68,9 @@ function isDETable(result: JobResult): boolean {
 }
 
 function VolcanoPlot({ columns, rows }: { columns: string[]; rows: Record<string, string | number>[] }) {
+  const [padjCut, setPadjCut] = useState(0.05);
+  const [lfcCut,  setLfcCut]  = useState(1.0);
+
   const l2fcCol = findCol(columns, "log2FoldChange", "log2fc", "log2FC");
   const padjCol = findCol(columns, "padj", "p.adj", "pvalue", "p.value", "pval");
   const geneCol = findCol(columns, "gene", "gene_id", "geneId", "symbol", "geneName");
@@ -43,7 +82,7 @@ function VolcanoPlot({ columns, rows }: { columns: string[]; rows: Record<string
     const x = parseFloat(String(r[l2fcCol] ?? "0"));
     const pv = parseFloat(String(r[padjCol] ?? "1"));
     const y = pv > 0 && isFinite(pv) ? -Math.log10(pv) : 0;
-    const sig: Pt["sig"] = Math.abs(x) >= 1 && pv < 0.05 ? (x > 0 ? "up" : "down") : "ns";
+    const sig: Pt["sig"] = Math.abs(x) >= lfcCut && pv < padjCut ? (x > 0 ? "up" : "down") : "ns";
     return { x, y, sig };
   }).filter((p) => isFinite(p.x) && isFinite(p.y));
 
@@ -64,7 +103,7 @@ function VolcanoPlot({ columns, rows }: { columns: string[]; rows: Record<string
   const toX = (v: number) => ML + ((v - xMin) / (xMax - xMin)) * pw;
   const toY = (v: number) => MT + (1 - v / yMax) * ph;
 
-  const sigLineY = toY(-Math.log10(0.05));
+  const sigLineY = toY(-Math.log10(padjCut));
   const xTicks: number[] = [];
   const step = (xMax - xMin) > 8 ? 2 : 1;
   for (let v = Math.ceil(xMin); v <= Math.floor(xMax); v += step) xTicks.push(v);
@@ -74,6 +113,21 @@ function VolcanoPlot({ columns, rows }: { columns: string[]; rows: Record<string
 
   return (
     <div>
+      {/* Threshold controls */}
+      <div style={{ display: "flex", gap: 16, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#374151" }}>
+          <span style={{ width: 80 }}>padj &lt; {padjCut}</span>
+          <input type="range" min={0.001} max={0.2} step={0.001} value={padjCut}
+            onChange={(e) => setPadjCut(parseFloat(e.target.value))}
+            style={{ width: 80 }} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#374151" }}>
+          <span style={{ width: 80 }}>|log₂FC| &gt; {lfcCut.toFixed(1)}</span>
+          <input type="range" min={0} max={4} step={0.1} value={lfcCut}
+            onChange={(e) => setLfcCut(parseFloat(e.target.value))}
+            style={{ width: 80 }} />
+        </label>
+      </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <StatCard label="Up-regulated"    value={up.toLocaleString()}   color="#ef4444" />
         <StatCard label="Down-regulated"  value={down.toLocaleString()} color="#3b82f6" />
@@ -86,7 +140,7 @@ function VolcanoPlot({ columns, rows }: { columns: string[]; rows: Record<string
         {sigLineY > MT && sigLineY < MT + ph && (
           <line x1={ML} y1={sigLineY} x2={ML + pw} y2={sigLineY} stroke="#9ca3af" strokeWidth={0.8} strokeDasharray="3,2" />
         )}
-        {[1, -1].map((fc) => {
+        {[lfcCut, -lfcCut].map((fc) => {
           const x = toX(fc);
           return x > ML && x < ML + pw
             ? <line key={fc} x1={x} y1={MT} x2={x} y2={MT + ph} stroke="#9ca3af" strokeWidth={0.8} strokeDasharray="3,2" />
@@ -272,6 +326,105 @@ function StatCard({ label, value, color }: { label: string; value: string; color
   );
 }
 
+// ── Pipeline interpretation blurbs ────────────────────────────────────────
+
+const PIPELINE_INTERPRETATION: Record<string, string> = {
+  "nf-core/rnaseq":     "Open the MultiQC report first to check alignment rate and duplication metrics. The count matrix (in the Data tab) contains raw read counts — use DESeq2 or edgeR for differential expression. The volcano plot appears automatically when a DE results file is detected.",
+  "nf-core/sarek":      "Review the MultiQC report for coverage and contamination. VCF files contain somatic/germline calls — filter by PASS in the Data tab. Check allele frequency (AF) in the INFO field. Clinical interpretation requires further annotation with VEP or ANNOVAR.",
+  "nf-core/atacseq":    "Check the FRiP score (fraction of reads in peaks) in MultiQC — FRiP > 0.2 indicates a successful experiment. Peak files (.narrowPeak) can be loaded into IGV for visual inspection.",
+  "nf-core/chipseq":    "Review the correlation heatmap in MultiQC to confirm replicate consistency. Peak files are suitable for motif enrichment (MEME-ChIP) or downstream TF binding analysis.",
+  "nf-core/methylseq":  "Bismark alignment rate should be > 60% for good WGBS libraries. The CpG methylation files can be imported into R (bsseq or DMRcate) for differential methylation analysis.",
+  "nf-core/ampliseq":   "DADA2 denoising produces exact amplicon sequence variants (ASVs). Check the rarefaction curve in MultiQC to confirm adequate sequencing depth. Relative abundance values are normalized per sample.",
+  "nf-core/fetchngs":   "Download complete. FASTQ files have been fetched from SRA/ENA and are ready for downstream processing. Check file sizes and MD5 checksums in the report.",
+  "snakemake":          "Snakemake wrappers ran modularly. Check each output file for expected formats and sizes. Log files contain per-rule execution details.",
+  "bioscript":          "Custom bash pipeline complete. Review the log file for command output and exit codes. Output files are listed in the Data tab.",
+};
+
+function PipelineInterpretation({ pipeline }: { pipeline: string }) {
+  const key = Object.keys(PIPELINE_INTERPRETATION).find((k) => pipeline.toLowerCase().includes(k.replace("nf-core/", "")));
+  const text = key ? PIPELINE_INTERPRETATION[key] : null;
+  if (!text) return null;
+  return (
+    <div style={{ background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 9, padding: "12px 14px", marginTop: 16 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "#0369a1", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>
+        How to interpret these results
+      </div>
+      <p style={{ fontSize: 12, color: "#0c4a6e", lineHeight: 1.6, margin: 0 }}>{text}</p>
+    </div>
+  );
+}
+
+// ── Provenance card ────────────────────────────────────────────────────────
+
+function ProvenanceCard({ provenance }: { provenance: Provenance }) {
+  const [copied, setCopied] = useState(false);
+
+  function buildMethodsText(): string {
+    return [
+      `Analysis was performed using ${provenance.pipeline ?? "the pipeline"}`,
+      provenance.pipeline_version ? ` (v${provenance.pipeline_version})` : "",
+      provenance.genome ? ` with reference genome ${provenance.genome}` : "",
+      provenance.n_samples ? `. A total of ${provenance.n_samples} sample(s) were analysed` : "",
+      `. The pipeline ran on a ${provenance.instance_type} instance for ${provenance.runtime_seconds} s`,
+      `, completing on ${new Date(provenance.completed_at).toLocaleDateString()}.`,
+    ].join("");
+  }
+
+  function handleCopy() {
+    navigator.clipboard.writeText(buildMethodsText()).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  const paramEntries = Object.entries(provenance.params ?? {})
+    .filter(([, v]) => v !== null && v !== undefined && v !== "" && v !== false);
+
+  return (
+    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "14px 16px", marginTop: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Methods / Provenance
+        </div>
+        <button
+          onClick={handleCopy}
+          style={{ padding: "4px 10px", borderRadius: 5, border: "1px solid #d1d5db", background: "#fff", color: "#374151", cursor: "pointer", fontSize: 11 }}
+        >
+          {copied ? "Copied!" : "Copy methods text"}
+        </button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 16px", fontSize: 12 }}>
+        {provenance.pipeline && (
+          <div><span style={{ color: "#9ca3af" }}>Pipeline: </span><strong>{provenance.pipeline}</strong></div>
+        )}
+        {provenance.pipeline_version && (
+          <div><span style={{ color: "#9ca3af" }}>Version: </span><strong>v{provenance.pipeline_version}</strong></div>
+        )}
+        {provenance.genome && (
+          <div><span style={{ color: "#9ca3af" }}>Genome: </span><strong>{provenance.genome}</strong></div>
+        )}
+        {provenance.n_samples !== undefined && (
+          <div><span style={{ color: "#9ca3af" }}>Samples: </span><strong>{provenance.n_samples}</strong></div>
+        )}
+        <div><span style={{ color: "#9ca3af" }}>Completed: </span><strong>{new Date(provenance.completed_at).toLocaleString()}</strong></div>
+        <div><span style={{ color: "#9ca3af" }}>Instance: </span><strong>{provenance.instance_type}</strong></div>
+      </div>
+      {paramEntries.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>Custom parameters</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {paramEntries.map(([k, v]) => (
+              <code key={k} style={{ background: "#e0f2fe", color: "#0369a1", borderRadius: 4, padding: "2px 8px", fontSize: 11 }}>
+                {k}={String(v)}
+              </code>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── HLA viewers ────────────────────────────────────────────────────────────
 
 function AlleleCard({ gene, allele_1, allele_2 }: HLAAllele) {
@@ -402,27 +555,76 @@ function VcfSummaryView({ variants }: { variants: VcfVariant[] }) {
   );
 }
 
-function VcfDataTab({ variants }: { variants: VcfVariant[] }) {
-  const [filter, setFilter] = useState("");
+function VcfDataTab({ jobId }: { jobId: string }) {
+  const [rows, setRows] = useState<VcfVariant[]>([]);
+  const [total, setTotal] = useState(0);
+  const [nextOffset, setNextOffset] = useState(0);
+  const [chroms, setChroms] = useState<string[]>([]);
+  const [chrom, setChrom] = useState("");
+  const [filterPass, setFilterPass] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [sortKey, setSortKey] = useState<keyof VcfVariant>("chrom");
   const [asc, setAsc] = useState(true);
 
-  const filtered = variants.filter((v) =>
-    !filter || Object.values(v).some((val) => String(val).toLowerCase().includes(filter.toLowerCase()))
-  );
-  const sorted = [...filtered].sort((a, b) => {
-    const av = String(a[sortKey] ?? ""), bv = String(b[sortKey] ?? "");
-    return asc ? av.localeCompare(bv, undefined, { numeric: true }) : bv.localeCompare(av, undefined, { numeric: true });
-  });
+  useEffect(() => {
+    let cancelled = false;
+    setRows([]);
+    setNextOffset(0);
+    setLoading(true);
+    getVcfPage(jobId, 0, 100, chrom, filterPass)
+      .then((res) => {
+        if (cancelled) return;
+        setRows(res.variants);
+        if (res.chroms.length > 0) setChroms(res.chroms);
+        setTotal(res.total);
+        setNextOffset(res.next_offset ?? 100);
+      })
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [jobId, chrom, filterPass]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function handleLoadMore() {
+    setLoading(true);
+    getVcfPage(jobId, nextOffset, 100, chrom, filterPass)
+      .then((res) => {
+        setRows((prev) => [...prev, ...res.variants]);
+        setTotal(res.total);
+        setNextOffset(res.next_offset ?? nextOffset + 100);
+      })
+      .catch(() => undefined)
+      .finally(() => setLoading(false));
+  }
 
   function toggleSort(k: keyof VcfVariant) {
     if (sortKey === k) setAsc(!asc); else { setSortKey(k); setAsc(true); }
   }
 
+  const sorted = [...rows].sort((a, b) => {
+    const av = String(a[sortKey] ?? ""), bv = String(b[sortKey] ?? "");
+    return asc ? av.localeCompare(bv, undefined, { numeric: true }) : bv.localeCompare(av, undefined, { numeric: true });
+  });
+
   const cols: (keyof VcfVariant)[] = ["chrom", "pos", "ref", "alt", "qual", "filter"];
   return (
     <>
-      <input placeholder="Filter variants…" value={filter} onChange={(e) => setFilter(e.target.value)} style={FILTER_INPUT} />
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <select
+          value={chrom}
+          onChange={(e) => setChrom(e.target.value)}
+          style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12, background: "#fff", color: "#374151" }}
+        >
+          <option value="">All chromosomes</option>
+          {chroms.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#374151", cursor: "pointer", userSelect: "none" }}>
+          <input type="checkbox" checked={filterPass} onChange={(e) => setFilterPass(e.target.checked)} />
+          PASS only
+        </label>
+        <div style={{ marginLeft: "auto", fontSize: 11, color: "#9ca3af" }}>
+          {loading ? "Loading…" : `${rows.length.toLocaleString()} of ${total.toLocaleString()} variants`}
+        </div>
+      </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead><tr style={{ background: "#f9fafb" }}>
@@ -433,20 +635,41 @@ function VcfDataTab({ variants }: { variants: VcfVariant[] }) {
             ))}
           </tr></thead>
           <tbody>
-            {sorted.slice(0, 200).map((v, i) => (
+            {sorted.map((v, i) => {
+              const chromClean = String(v.chrom).replace(/^chr/i, "");
+              const ensemblUrl = /^\d+$|^[XY]$|^MT$/i.test(chromClean)
+                ? `https://www.ensembl.org/Homo_sapiens/Location/View?r=${v.chrom}:${v.pos}-${v.pos}`
+                : null;
+              return (
               <tr key={i} style={{ borderBottom: "1px solid #f3f4f6" }}>
                 <td style={TD}><code style={MONO_BLUE}>{v.chrom}</code></td>
-                <td style={TD}>{v.pos}</td>
+                <td style={TD}>
+                  {ensemblUrl
+                    ? <a href={ensemblUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#2563eb", textDecoration: "none", fontFamily: "monospace" }}>{v.pos} ↗</a>
+                    : v.pos
+                  }
+                </td>
                 <td style={TD}><code style={MONO_BLUE}>{v.ref}</code></td>
                 <td style={TD}><code style={MONO_BLUE}>{v.alt}</code></td>
                 <td style={TD}>{v.qual ?? "."}</td>
                 <td style={TD}>{v.filter ?? "."}</td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
-        {sorted.length > 200 && <div style={MORE_HINT}>Showing 200 of {sorted.length} variants</div>}
       </div>
+      {rows.length < total && (
+        <div style={{ textAlign: "center", padding: "12px 0" }}>
+          <button
+            onClick={handleLoadMore}
+            disabled={loading}
+            style={{ padding: "7px 20px", borderRadius: 7, border: "1px solid #d1d5db", background: "#fff", color: "#374151", cursor: loading ? "default" : "pointer", fontSize: 12 }}
+          >
+            {loading ? "Loading…" : `Load more (${(total - rows.length).toLocaleString()} remaining)`}
+          </button>
+        </div>
+      )}
     </>
   );
 }
@@ -664,6 +887,25 @@ interface ResultsPanelProps {
 export function ResultsPanel({ job, isOpen, onClose, onReset }: ResultsPanelProps) {
   const [pos, setPos] = useState<"side" | "center">("side");
   const [tab, setTab] = useState<"summary" | "data" | "downloads" | "raw">("summary");
+  const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
+
+  async function handleFileDownload(path: string) {
+    // S3 paths: generate presigned URL and open in new tab
+    if (path.startsWith("s3://")) {
+      setDownloadingPath(path);
+      try {
+        const url = await getDownloadUrl(job.job_id, path);
+        window.open(url, "_blank", "noopener");
+      } catch {
+        // fallback: copy path to clipboard
+        navigator.clipboard.writeText(path).catch(() => undefined);
+      } finally {
+        setDownloadingPath(null);
+      }
+    } else if (path.startsWith("http")) {
+      window.open(path, "_blank", "noopener");
+    }
+  }
 
   const result = job.result;
   if (!result) return null;
@@ -776,6 +1018,17 @@ export function ResultsPanel({ job, isOpen, onClose, onReset }: ResultsPanelProp
           {/* SUMMARY TAB */}
           {tab === "summary" && (
             <>
+              {result._mock && (
+                <div style={{ background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 8, padding: "10px 14px", marginBottom: 16, display: "flex", gap: 10, alignItems: "flex-start" }}>
+                  <span style={{ fontSize: 18, flexShrink: 0 }}>⚠️</span>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#92400e" }}>Demo data — not for clinical use</div>
+                    <div style={{ fontSize: 11, color: "#a16207", marginTop: 2, lineHeight: 1.4 }}>
+                      This result was produced by a mock runner for demonstration purposes. Set <code style={{ background: "#fde68a", padding: "1px 4px", borderRadius: 3 }}>NEXTFLOW_BACKEND=awsbatch</code> (or the equivalent for your runner) to run real analysis.
+                    </div>
+                  </div>
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
                 <StatCard label="Instance"  value={result.instance_type}               color="#6b7280" />
                 <StatCard label="Runtime"   value={`${result.runtime_seconds}s`}       color="#3b82f6" />
@@ -804,12 +1057,41 @@ export function ResultsPanel({ job, isOpen, onClose, onReset }: ResultsPanelProp
                   </button>
                 </div>
               )}
-              {kind === "files" && result.files && (
-                <StatCard label="Output files" value={result.files.length.toLocaleString()} color="#8b5cf6" />
-              )}
+              {kind === "files" && result.files && (() => {
+                const files = result.files;
+                const htmlFiles  = files.filter((f) => isHtmlFile(f));
+                const bamFiles   = files.filter((f) => /\.(bam|cram|sam)$/i.test(f.name));
+                const vcfFiles   = files.filter((f) => /\.(vcf|bcf)(\.gz)?$/i.test(f.name));
+                const fastaFiles = files.filter((f) => /\.(fa|fasta|fna|ffn|faa)(\.gz)?$/i.test(f.name));
+                const otherFiles = files.filter((f) => !htmlFiles.includes(f) && !bamFiles.includes(f) && !vcfFiles.includes(f) && !fastaFiles.includes(f));
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <StatCard label="Total files"   value={files.length.toLocaleString()}      color="#8b5cf6" />
+                      {htmlFiles.length  > 0 && <StatCard label="QC reports" value={htmlFiles.length.toLocaleString()}  color="#0ea5e9" />}
+                      {bamFiles.length   > 0 && <StatCard label="Alignments" value={bamFiles.length.toLocaleString()}   color="#22c55e" />}
+                      {vcfFiles.length   > 0 && <StatCard label="Variants"   value={vcfFiles.length.toLocaleString()}   color="#f59e0b" />}
+                      {fastaFiles.length > 0 && <StatCard label="Sequences"  value={fastaFiles.length.toLocaleString()} color="#6366f1" />}
+                      {otherFiles.length > 0 && <StatCard label="Other"      value={otherFiles.length.toLocaleString()} color="#9ca3af" />}
+                    </div>
+                    {htmlFiles.length > 0 && (
+                      <div style={{ padding: "10px 12px", background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 8 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "#0369a1", marginBottom: 4 }}>
+                          📊 {htmlFiles.length} HTML report{htmlFiles.length > 1 ? "s" : ""} available
+                        </div>
+                        <div style={{ fontSize: 11, color: "#0284c7" }}>
+                          Open the Data tab to browse output files and download reports.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               {kind === "text" && (
                 <div style={{ fontSize: 13, color: "#6b7280" }}>Switch to the Data tab to view results.</div>
               )}
+              {result.provenance && <ProvenanceCard provenance={result.provenance} />}
+              {result.provenance?.pipeline && <PipelineInterpretation pipeline={result.provenance.pipeline} />}
             </>
           )}
 
@@ -817,7 +1099,7 @@ export function ResultsPanel({ job, isOpen, onClose, onReset }: ResultsPanelProp
           {tab === "data" && (
             <>
               {kind === "hla_alleles" && result.hla_alleles && <HLADataTab alleles={result.hla_alleles} />}
-              {kind === "vcf"         && result.variants    && <VcfDataTab variants={result.variants} />}
+              {kind === "vcf"         && <VcfDataTab jobId={job.job_id} />}
               {kind === "table"       && result.columns     && result.rows && (
                 <GenericTableViewer columns={result.columns} rows={result.rows} />
               )}
@@ -831,22 +1113,51 @@ export function ResultsPanel({ job, isOpen, onClose, onReset }: ResultsPanelProp
               )}
               {kind === "files" && result.files && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {result.files.map((f, i) => (
-                    <div key={i} style={{ padding: "9px 12px", background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 7, display: "flex", gap: 10, alignItems: "center" }}>
-                      <span style={{ fontSize: 16, flexShrink: 0 }}>📄</span>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
-                        <div style={{ fontSize: 11, color: "#6b7280", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.path}</div>
-                      </div>
-                      {f.size_bytes !== undefined && (
-                        <div style={{ fontSize: 11, color: "#9ca3af", flexShrink: 0 }}>
-                          {f.size_bytes < 1024 ? `${f.size_bytes} B`
-                            : f.size_bytes < 1048576 ? `${(f.size_bytes / 1024).toFixed(1)} KB`
-                            : `${(f.size_bytes / 1048576).toFixed(1)} MB`}
+                  {result.files.map((f, i) => {
+                    const isS3 = f.path.startsWith("s3://");
+                    const isHttp = f.path.startsWith("http");
+                    const canDownload = isS3 || isHttp;
+                    const isLoading = downloadingPath === f.path;
+                    const isHtml = isHtmlFile(f);
+                    return (
+                      <div key={i} style={{ padding: "9px 12px", background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 7, display: "flex", gap: 10, alignItems: "flex-start" }}>
+                        <span style={{ fontSize: 18, flexShrink: 0, marginTop: 1 }}>{fileIcon(f.mime_type, f.name)}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                          {f.description && (
+                            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 1, lineHeight: 1.3 }}>{f.description}</div>
+                          )}
+                          <div style={{ fontSize: 10, color: "#9ca3af", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>{f.path}</div>
                         </div>
-                      )}
-                    </div>
-                  ))}
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0 }}>
+                          {f.size_bytes !== undefined && (
+                            <div style={{ fontSize: 11, color: "#9ca3af" }}>{formatBytes(f.size_bytes)}</div>
+                          )}
+                          <div style={{ display: "flex", gap: 4 }}>
+                            {isHtml && isHttp && (
+                              <button
+                                onClick={() => window.open(f.path, "_blank", "noopener")}
+                                title="Open report in new tab"
+                                style={{ padding: "4px 10px", borderRadius: 5, border: "1px solid #bae6fd", background: "#e0f2fe", color: "#0369a1", cursor: "pointer", fontSize: 11, fontWeight: 500 }}
+                              >
+                                Open
+                              </button>
+                            )}
+                            {canDownload && (
+                              <button
+                                onClick={() => handleFileDownload(f.path)}
+                                disabled={isLoading}
+                                title="Download file"
+                                style={{ padding: "4px 10px", borderRadius: 5, border: "1px solid #d1d5db", background: "#fff", color: "#374151", cursor: "pointer", fontSize: 12, fontWeight: 500 }}
+                              >
+                                {isLoading ? "…" : "⬇"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
               {kind === "text" && result.content && (

@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BioFlow Platform — Architecture Overview</title>
+<style>
+  :root {
+    --blue:    #2563eb;
+    --green:   #16a34a;
+    --amber:   #d97706;
+    --violet:  #7c3aed;
+    --teal:    #0d9488;
+    --indigo:  #4f46e5;
+    --slate:   #0f172a;
+    --slate2:  #1e293b;
+    --muted:   #64748b;
+    --border:  #e2e8f0;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f8fafc;
+    color: #0f172a;
+    line-height: 1.5;
+  }
+
+  /* ── HERO ─────────────────────────────────── */
+  .hero {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 60%, #0c2340 100%);
+    color: #fff;
+    padding: 72px 48px 64px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 800px 400px at 50% 120%, rgba(37,99,235,.18) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.14);
+    border-radius: 999px;
+    padding: 4px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: #93c5fd;
+    margin-bottom: 24px;
+  }
+  .hero h1 {
+    font-size: 56px;
+    font-weight: 800;
+    letter-spacing: -.03em;
+    line-height: 1.1;
+    margin-bottom: 16px;
+  }
+  .hero h1 span { color: #60a5fa; }
+  .hero p {
+    font-size: 20px;
+    color: #94a3b8;
+    max-width: 640px;
+    margin: 0 auto 40px;
+  }
+  .stats-row {
+    display: flex;
+    justify-content: center;
+    gap: 0;
+    flex-wrap: wrap;
+    margin-top: 48px;
+  }
+  .stat {
+    padding: 16px 36px;
+    border-right: 1px solid rgba(255,255,255,.1);
+    text-align: center;
+  }
+  .stat:last-child { border-right: none; }
+  .stat-val {
+    font-size: 36px;
+    font-weight: 800;
+    background: linear-gradient(135deg, #60a5fa, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .stat-label { font-size: 12px; color: #64748b; font-weight: 500; text-transform: uppercase; letter-spacing: .06em; }
+
+  /* ── SECTION WRAPPER ─────────────────────── */
+  .section { padding: 64px 48px; max-width: 1280px; margin: 0 auto; }
+  .section-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--blue);
+    margin-bottom: 10px;
+  }
+  .section-h2 {
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    color: #0f172a;
+    margin-bottom: 8px;
+  }
+  .section-sub { font-size: 16px; color: #64748b; margin-bottom: 48px; }
+
+  /* ── ARCHITECTURE DIAGRAM ─────────────────── */
+  .arch-wrap {
+    background: var(--slate);
+    border-radius: 20px;
+    padding: 48px;
+    overflow-x: auto;
+  }
+  .arch-layer {
+    display: flex;
+    gap: 16px;
+    align-items: stretch;
+    justify-content: center;
+    flex-wrap: nowrap;
+  }
+  .arch-box {
+    border-radius: 12px;
+    padding: 18px 20px;
+    min-width: 150px;
+    text-align: center;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .arch-box .icon { font-size: 24px; }
+  .arch-box .label { font-size: 13px; font-weight: 700; }
+  .arch-box .sub { font-size: 11px; opacity: .7; line-height: 1.4; }
+  .arch-arrow {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 36px;
+    color: #475569;
+    font-size: 20px;
+  }
+  .arch-arrow-label { font-size: 11px; color: #475569; margin-top: -4px; text-align: center; }
+
+  .layer-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: #475569;
+    margin-bottom: 12px;
+    padding-left: 4px;
+  }
+
+  /* ── PIPELINE TYPES ──────────────────────── */
+  .pipeline-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+  }
+  .pipeline-card {
+    border-radius: 16px;
+    padding: 28px 24px;
+    border: 1.5px solid;
+    position: relative;
+    overflow: hidden;
+  }
+  .pipeline-card::before {
+    content: "";
+    position: absolute;
+    top: 0; right: 0;
+    width: 120px; height: 120px;
+    border-radius: 50%;
+    opacity: .07;
+    transform: translate(30%, -30%);
+  }
+  .pipeline-card .badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    border-radius: 999px;
+    padding: 3px 10px;
+    margin-bottom: 12px;
+  }
+  .pipeline-card h3 { font-size: 18px; font-weight: 800; margin-bottom: 6px; }
+  .pipeline-card p { font-size: 13px; line-height: 1.6; color: #64748b; margin-bottom: 14px; }
+  .pipeline-card .tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .tool-chip {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 6px;
+    background: rgba(0,0,0,.05);
+    border: 1px solid rgba(0,0,0,.08);
+    color: #374151;
+  }
+
+  /* ── FEATURE GRID ────────────────────────── */
+  .feat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+  .feat-card {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px 20px;
+  }
+  .feat-card .feat-icon {
+    font-size: 28px;
+    margin-bottom: 14px;
+    display: block;
+  }
+  .feat-card h4 { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+  .feat-card p { font-size: 12px; color: #64748b; line-height: 1.6; }
+
+  /* ── FLOW DIAGRAM ────────────────────────── */
+  .flow-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    overflow-x: auto;
+    padding: 32px 0;
+  }
+  .flow-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    min-width: 130px;
+    flex: 1;
+  }
+  .flow-circle {
+    width: 64px; height: 64px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px;
+    margin-bottom: 12px;
+    flex-shrink: 0;
+  }
+  .flow-step h4 { font-size: 13px; font-weight: 700; margin-bottom: 3px; }
+  .flow-step p { font-size: 11px; color: #64748b; line-height: 1.5; max-width: 110px; }
+  .flow-arrow {
+    font-size: 22px;
+    color: #cbd5e1;
+    flex-shrink: 0;
+    padding: 0 4px;
+    margin-bottom: 32px;
+  }
+
+  /* ── TECH STACK ──────────────────────────── */
+  .stack-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
+  }
+  .stack-group {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+  }
+  .stack-group h4 {
+    font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: #94a3b8; margin-bottom: 16px;
+  }
+  .stack-items { display: flex; flex-wrap: wrap; gap: 8px; }
+  .stack-tag {
+    font-size: 12px; font-weight: 600; padding: 5px 12px;
+    border-radius: 8px; background: #f1f5f9; border: 1px solid #e2e8f0; color: #374151;
+  }
+  .stack-tag.hi { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+
+  /* ── INFRA DIAGRAM ───────────────────────── */
+  .infra-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+  .infra-panel {
+    background: var(--slate);
+    border-radius: 14px;
+    padding: 28px;
+  }
+  .infra-panel h4 { font-size: 14px; font-weight: 700; color: #e2e8f0; margin-bottom: 16px; }
+  .infra-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+  }
+  .infra-row:last-child { border-bottom: none; }
+  .infra-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .infra-row-text { font-size: 13px; color: #cbd5e1; }
+  .infra-row-tag { margin-left: auto; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 6px; }
+
+  /* ── CANVAS PREVIEW ─────────────────────── */
+  .canvas-preview {
+    background: #f0f4f8;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 20px;
+    padding: 40px 32px;
+    position: relative;
+    overflow: hidden;
+    min-height: 360px;
+  }
+  /* SVG node */
+  .cn { position: absolute; border-radius: 12px; padding: 14px 16px; min-width: 140px; text-align: left; box-shadow: 0 4px 16px rgba(0,0,0,.12); }
+  .cn .cn-title { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+  .cn .cn-sub { font-size: 10px; opacity: .75; }
+  .cn .cn-handle { position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 50%; transform: translateY(-50%); border: 2px solid #fff; }
+  .cn .cn-handle.l { left: -6px; }
+  .cn .cn-handle.r { right: -6px; }
+
+  /* ── RESULTS ROW ─────────────────────────── */
+  .results-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .result-card {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 22px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .result-card .rc-icon { font-size: 26px; }
+  .result-card h4 { font-size: 14px; font-weight: 700; }
+  .result-card p { font-size: 12px; color: #64748b; line-height: 1.6; }
+
+  /* ── FOOTER ──────────────────────────────── */
+  .footer {
+    background: var(--slate);
+    color: #475569;
+    text-align: center;
+    padding: 32px 48px;
+    font-size: 13px;
+  }
+  .footer strong { color: #94a3b8; }
+
+  /* ── DIVIDER ─────────────────────────────── */
+  .divider { height: 1px; background: var(--border); max-width: 1280px; margin: 0 auto; }
+
+  /* ── PRINT / WIDE fix ────────────────────── */
+  @media (max-width: 900px) {
+    .hero h1 { font-size: 36px; }
+    .feat-grid { grid-template-columns: repeat(2,1fr); }
+    .pipeline-grid { grid-template-columns: 1fr; }
+    .results-grid { grid-template-columns: 1fr 1fr; }
+    .stack-grid { grid-template-columns: 1fr; }
+    .infra-cols { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════ HERO -->
+<header class="hero">
+  <div class="hero-badge">⬡ Platform Overview</div>
+  <h1>Bioinformatics<br/><span>Pipeline Platform</span></h1>
+  <p>A full-stack, cloud-native environment for building, running, and visualising genomic analysis pipelines — no infrastructure expertise required.</p>
+
+  <div class="stats-row">
+    <div class="stat"><div class="stat-val">67</div><div class="stat-label">Features shipped</div></div>
+    <div class="stat"><div class="stat-val">6</div><div class="stat-label">Pipeline frameworks</div></div>
+    <div class="stat"><div class="stat-val">454</div><div class="stat-label">Snakemake wrappers</div></div>
+    <div class="stat"><div class="stat-val">4 708</div><div class="stat-label">Community workflows</div></div>
+    <div class="stat"><div class="stat-val">154</div><div class="stat-label">Backend tests</div></div>
+    <div class="stat"><div class="stat-val">9</div><div class="stat-label">DB migrations</div></div>
+  </div>
+</header>
+
+<!-- ══════════════════════════════════════════════════════ RUN FLOW -->
+<div class="section">
+  <div class="section-title">End-to-end workflow</div>
+  <div class="section-h2">From file to insight in minutes</div>
+  <div class="section-sub">The platform abstracts everything between raw sequencing data and publication-ready results.</div>
+
+  <div class="flow-wrap">
+
+    <div class="flow-step">
+      <div class="flow-circle" style="background:#eff6ff;border:2px solid #bfdbfe;">📁</div>
+      <h4>Upload / SRA</h4>
+      <p>FASTQ, BAM, or SRA accession · paired-end support</p>
+    </div>
+    <div class="flow-arrow">→</div>
+
+    <div class="flow-step">
+      <div class="flow-circle" style="background:#f0fdf4;border:2px solid #bbf7d0;">🧩</div>
+      <h4>Build Pipeline</h4>
+      <p>Drag-drop canvas · 10 node types · auto-wiring</p>
+    </div>
+    <div class="flow-arrow">→</div>
+
+    <div class="flow-step">
+      <div class="flow-circle" style="background:#fefce8;border:2px solid #fde68a;">💰</div>
+      <h4>Cost Estimate</h4>
+      <p>Tier selector · Stripe checkout · transparent pricing</p>
+    </div>
+    <div class="flow-arrow">→</div>
+
+    <div class="flow-step">
+      <div class="flow-circle" style="background:#f5f3ff;border:2px solid #ddd6fe;">⚡</div>
+      <h4>Cloud Execution</h4>
+      <p>AWS Batch · SPOT instances · live log streaming</p>
+    </div>
+    <div class="flow-arrow">→</div>
+
+    <div class="flow-step">
+      <div class="flow-circle" style="background:#fff7ed;border:2px solid #fed7aa;">📊</div>
+      <h4>Results Panel</h4>
+      <p>Tables, VCF, volcano plot, MultiQC, IGV-ready files</p>
+    </div>
+    <div class="flow-arrow">→</div>
+
+    <div class="flow-step">
+      <div class="flow-circle" style="background:#fdf4ff;border:2px solid #e9d5ff;">⬇</div>
+      <h4>Download</h4>
+      <p>JSON · TSV · per-file S3 presigned URLs</p>
+    </div>
+
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════════════════════ PIPELINE BUILDER -->
+<div class="section">
+  <div class="section-title">Visual builder</div>
+  <div class="section-h2">Node-based pipeline canvas</div>
+  <div class="section-sub">Compose arbitrarily complex workflows by wiring typed ports together — the platform validates, auto-layouts, and routes execution automatically.</div>
+
+  <!-- Canvas mock -->
+  <div class="canvas-preview">
+    <!-- Palette hint -->
+    <div style="position:absolute;left:0;top:0;bottom:0;width:160px;background:#fff;border-right:1px solid #e2e8f0;border-radius:20px 0 0 20px;padding:16px 12px;">
+      <div style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px;">Node Palette</div>
+      <div style="font-size:11px;color:#374151;margin-bottom:6px;font-weight:600;">📂 Inputs</div>
+      <div style="font-size:11px;color:#374151;margin-bottom:6px;font-weight:600;">🧬 HLA Typing</div>
+      <div style="font-size:11px;color:#374151;margin-bottom:6px;font-weight:600;">🟢 nf-core</div>
+      <div style="font-size:11px;color:#374151;margin-bottom:6px;font-weight:600;">🟡 Snakemake</div>
+      <div style="font-size:11px;color:#374151;margin-bottom:6px;font-weight:600;">🟣 BioScript</div>
+      <div style="font-size:11px;color:#374151;margin-bottom:6px;font-weight:600;">🩵 Custom</div>
+      <div style="font-size:11px;color:#374151;font-weight:600;">📈 Results</div>
+      <div style="margin-top:16px;padding:8px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;font-size:10px;color:#15803d;font-weight:600;">Cmd+K Spotlight ✨</div>
+    </div>
+
+    <!-- Nodes positioned on canvas -->
+    <div style="margin-left:170px;position:relative;height:280px;">
+
+      <!-- InputFile node -->
+      <div class="cn" style="left:20px;top:100px;background:#eff6ff;border:2px solid #3b82f6;color:#1e3a8a;">
+        <div class="cn-handle r" style="background:#3b82f6;"></div>
+        <div class="cn-title">📁 Input File</div>
+        <div class="cn-sub">sample.fastq.gz<br/>Paired-end · R1+R2</div>
+      </div>
+
+      <!-- SVG edge 1 -->
+      <svg style="position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;" xmlns="http://www.w3.org/2000/svg">
+        <defs><marker id="ah" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#94a3b8"/></marker></defs>
+        <!-- Input → nf-core pipeline -->
+        <path d="M 168,160 C 220,160 240,140 290,140" stroke="#94a3b8" stroke-width="2" fill="none" marker-end="url(#ah)" stroke-dasharray="5,3"/>
+        <!-- nf-core → Results -->
+        <path d="M 468,140 C 520,140 530,160 570,160" stroke="#94a3b8" stroke-width="2" fill="none" marker-end="url(#ah)" stroke-dasharray="5,3"/>
+        <!-- Input → Snakemake -->
+        <path d="M 168,165 C 220,165 240,220 290,220" stroke="#94a3b8" stroke-width="2" fill="none" marker-end="url(#ah)" stroke-dasharray="5,3"/>
+        <!-- Snakemake → Results -->
+        <path d="M 468,220 C 520,220 530,175 570,170" stroke="#94a3b8" stroke-width="2" fill="none" marker-end="url(#ah)" stroke-dasharray="5,3"/>
+      </svg>
+
+      <!-- nf-core pipeline node -->
+      <div class="cn" style="left:290px;top:100px;background:#f0fdf4;border:2px solid #16a34a;color:#14532d;">
+        <div class="cn-handle l" style="background:#16a34a;"></div>
+        <div class="cn-handle r" style="background:#16a34a;"></div>
+        <div class="cn-title">🟢 nf-core/rnaseq</div>
+        <div class="cn-sub">STAR · SALMON · DESeq2</div>
+        <div style="margin-top:8px;display:inline-block;font-size:9px;font-weight:700;background:#dcfce7;color:#16a34a;border-radius:4px;padding:1px 6px;">nf-core</div>
+      </div>
+
+      <!-- Snakemake wrapper node -->
+      <div class="cn" style="left:290px;top:192px;background:#fffbeb;border:2px solid #d97706;color:#78350f;">
+        <div class="cn-handle l" style="background:#d97706;"></div>
+        <div class="cn-handle r" style="background:#d97706;"></div>
+        <div class="cn-title">🟡 samtools/sort</div>
+        <div class="cn-sub">Snakemake wrapper<br/>bam-in · bam-out</div>
+      </div>
+
+      <!-- Results node -->
+      <div class="cn" style="left:570px;top:130px;background:#f0fdf4;border:2px solid #16a34a;color:#14532d;">
+        <div class="cn-handle l" style="background:#16a34a;"></div>
+        <div class="cn-title">📈 Results</div>
+        <div class="cn-sub">Volcano · VCF<br/>MultiQC · Files</div>
+      </div>
+
+      <!-- Toolbar hint -->
+      <div style="position:absolute;top:0;left:0;right:0;height:44px;background:#fff;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;padding:0 16px;gap:12px;border-radius:0;">
+        <span style="font-size:11px;color:#374151;font-weight:700;flex:1;">Untitled pipeline</span>
+        <span style="font-size:10px;padding:3px 10px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;border-radius:6px;font-weight:700;">nf-core</span>
+        <span style="font-size:10px;padding:3px 10px;background:#f1f5f9;border:1px solid #e2e8f0;color:#374151;border-radius:6px;">Save</span>
+        <span style="font-size:10px;padding:3px 10px;background:#f1f5f9;border:1px solid #e2e8f0;color:#374151;border-radius:6px;">Templates</span>
+        <span style="font-size:10px;padding:3px 10px;background:#16a34a;color:#fff;border-radius:6px;font-weight:700;">▶ Run</span>
+      </div>
+
+    </div>
+
+    <!-- Legend -->
+    <div style="position:absolute;bottom:16px;right:24px;display:flex;gap:12px;align-items:center;">
+      <span style="font-size:10px;color:#94a3b8;">Port types:</span>
+      <span style="font-size:10px;padding:2px 8px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;border-radius:4px;font-weight:600;">file</span>
+      <span style="font-size:10px;padding:2px 8px;background:#fef3c7;border:1px solid #fde68a;color:#92400e;border-radius:4px;font-weight:600;">smk</span>
+      <span style="font-size:10px;padding:2px 8px;background:#f5f3ff;border:1px solid #ddd6fe;color:#6d28d9;border-radius:4px;font-weight:600;">script</span>
+      <span style="font-size:10px;padding:2px 8px;background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;border-radius:4px;font-weight:600;">result</span>
+    </div>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════════════════════ PIPELINE TYPES -->
+<div class="section">
+  <div class="section-title">Supported frameworks</div>
+  <div class="section-h2">Six pipeline execution engines</div>
+  <div class="section-sub">Each framework has dedicated node types, connection rules, a mock runner for local dev, and a real AWS Batch runner for production.</div>
+
+  <div class="pipeline-grid">
+
+    <!-- HLA -->
+    <div class="pipeline-card" style="background:#eff6ff;border-color:#bfdbfe;">
+      <div class="badge" style="background:#dbeafe;color:#1d4ed8;">🧬 HLA Typing</div>
+      <h3 style="color:#1e3a8a;">HLA-HD Pipeline</h3>
+      <p>Clinical-grade HLA allele typing from FASTQ or BAM. Locus-coloured result cards with Class I / II grouping and comparison charts.</p>
+      <div class="tools">
+        <span class="tool-chip">HLA-HD</span>
+        <span class="tool-chip">Class I & II</span>
+        <span class="tool-chip">Allele charts</span>
+      </div>
+    </div>
+
+    <!-- nf-core -->
+    <div class="pipeline-card" style="background:#f0fdf4;border-color:#bbf7d0;">
+      <div class="badge" style="background:#dcfce7;color:#15803d;">🟢 nf-core</div>
+      <h3 style="color:#14532d;">nf-core Pipelines & Modules</h3>
+      <p>7 curated nf-core pipelines with smart samplesheet generation (SE + PE). Full module catalog scraped from GitHub with port-aware handles.</p>
+      <div class="tools">
+        <span class="tool-chip">rnaseq</span>
+        <span class="tool-chip">sarek</span>
+        <span class="tool-chip">atacseq</span>
+        <span class="tool-chip">chipseq</span>
+        <span class="tool-chip">methylseq</span>
+        <span class="tool-chip">ampliseq</span>
+        <span class="tool-chip">fetchngs</span>
+      </div>
+    </div>
+
+    <!-- Snakemake -->
+    <div class="pipeline-card" style="background:#fffbeb;border-color:#fde68a;">
+      <div class="badge" style="background:#fef3c7;color:#92400e;">🟡 Snakemake</div>
+      <h3 style="color:#78350f;">Snakemake Wrappers & Workflows</h3>
+      <p>454 bio-tool wrappers with typed input/output ports scraped from the official repo. 4 708 community workflows from the Snakemake Workflow Catalog.</p>
+      <div class="tools">
+        <span class="tool-chip">454 wrappers</span>
+        <span class="tool-chip">4 708 workflows</span>
+        <span class="tool-chip">DAG layout</span>
+      </div>
+    </div>
+
+    <!-- BioScript -->
+    <div class="pipeline-card" style="background:#faf5ff;border-color:#ddd6fe;">
+      <div class="badge" style="background:#ede9fe;color:#6d28d9;">🟣 BioScript</div>
+      <h3 style="color:#4c1d95;">Custom Bash Scripting</h3>
+      <p>Violet expandable code editor node. Pre-loaded shell helper library with QC, alignment, variant-calling, and MultiQC helpers. Runs in a Docker image with 15+ bio tools.</p>
+      <div class="tools">
+        <span class="tool-chip">samtools</span>
+        <span class="tool-chip">bwa</span>
+        <span class="tool-chip">bcftools</span>
+        <span class="tool-chip">STAR</span>
+        <span class="tool-chip">fastp</span>
+        <span class="tool-chip">MultiQC</span>
+      </div>
+    </div>
+
+    <!-- Custom -->
+    <div class="pipeline-card" style="background:#f0fdfa;border-color:#99f6e4;">
+      <div class="badge" style="background:#ccfbf1;color:#0f766e;">🩵 Custom Tools</div>
+      <h3 style="color:#134e4a;">5 Standalone Linux Pipelines</h3>
+      <p>De novo assembly, metagenomics, genome annotation, phylogenomics, and long-read assembly — each as a purpose-built Docker pipeline with dedicated outputs.</p>
+      <div class="tools">
+        <span class="tool-chip">SPAdes</span>
+        <span class="tool-chip">Kraken2+Bracken</span>
+        <span class="tool-chip">Prokka</span>
+        <span class="tool-chip">MAFFT+IQ-TREE 2</span>
+        <span class="tool-chip">Flye+NanoStat</span>
+      </div>
+    </div>
+
+    <!-- Mixed -->
+    <div class="pipeline-card" style="background:#eef2ff;border-color:#c7d2fe;">
+      <div class="badge" style="background:#e0e7ff;color:#4338ca;">⚡ Mixed</div>
+      <h3 style="color:#312e81;">Multi-framework Workflows</h3>
+      <p>Combine nf-core + Snakemake + BioScript + Custom nodes on the same canvas. Cross-framework port connections are automatically validated and routed.</p>
+      <div class="tools">
+        <span class="tool-chip">Auto-detect type</span>
+        <span class="tool-chip">Smart routing</span>
+        <span class="tool-chip">Pipeline badge</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════════════════════ FEATURES -->
+<div class="section">
+  <div class="section-title">Platform capabilities</div>
+  <div class="section-h2">Everything built-in</div>
+  <div class="section-sub">No third-party add-ons needed — every feature ships as first-class functionality.</div>
+
+  <div class="feat-grid">
+
+    <div class="feat-card">
+      <span class="feat-icon">🎯</span>
+      <h4>Auto-wiring</h4>
+      <p>Greedy bipartite port matching + topological DAG layout. Drop nodes and edges appear automatically.</p>
+    </div>
+
+    <div class="feat-card">
+      <span class="feat-icon">⌨️</span>
+      <h4>Keyboard-first UX</h4>
+      <p>Ctrl+S save · Ctrl+Z/Y undo/redo · Cmd+K spotlight command palette with catalog search.</p>
+    </div>
+
+    <div class="feat-card">
+      <span class="feat-icon">📋</span>
+      <h4>8 Pipeline Templates</h4>
+      <p>One-click gallery: RNA-seq, variant calling, ATAC-seq, metagenomics, long-read assembly, and more.</p>
+    </div>
+
+    <div class="feat-card">
+      <span class="feat-icon">↩️</span>
+      <h4>Undo / Redo</h4>
+      <p>50-step snapshot stack. Covers drops, connections, loads, template applications, and new canvas.</p>
+    </div>
+
+    <div class="feat-card">
+      <span class="feat-icon">📤</span>
+      <h4>SRA / URL Input</h4>
+      <p>Type an SRR/ERR/DRR accession or HTTPS/FTP URL — the worker downloads at runtime. No pre-staging needed.</p>
+    </div>
+
+    <div class="feat-card">
+      <span class="feat-icon">📡</span>
+      <h4>Live Log Streaming</h4>
+      <p>Redis-backed per-job log buffer. Frontend polls every 1.5s, renders a dark terminal pane with auto-scroll.</p>
+    </div>
+
+    <div class="feat-card">
+      <span class="feat-icon">🔐</span>
+      <h4>Auth + Rate Limiting</h4>
+      <p>JWT register/login · per-user job scoping · slowapi rate limits (5 reg / 10 login / 20 jobs per min).</p>
+    </div>
+
+    <div class="feat-card">
+      <span class="feat-icon">💳</span>
+      <h4>Stripe Payments</h4>
+      <p>Cost-estimate modal before every run. Stripe-hosted checkout. Webhook triggers job creation atomically.</p>
+    </div>
+
+    <div class="feat-card">
+      <span class="feat-icon">🔁</span>
+      <h4>Cancel &amp; Retry</h4>
+      <p>Cancel revokes the Celery task (SIGTERM) and terminates the AWS Batch job. Retry clones the job instantly.</p>
+    </div>
+
+    <div class="feat-card">
+      <span class="feat-icon">🗂️</span>
+      <h4>Job History</h4>
+      <p>Table of last 50 jobs with status, pipeline, tier, cost, and timestamp. Cancel / Retry buttons inline.</p>
+    </div>
+
+    <div class="feat-card">
+      <span class="feat-icon">🔗</span>
+      <h4>Paired-end Support</h4>
+      <p>R1 + R2 upload slots with a separate <code>file-out-r2</code> handle. Samplesheet generator fills <code>fastq_2</code>.</p>
+    </div>
+
+    <div class="feat-card">
+      <span class="feat-icon">⬇</span>
+      <h4>Presigned Downloads</h4>
+      <p>Per-file S3 presigned GET URLs, verified against the job's result manifest. Copy JSON / export TSV.</p>
+    </div>
+
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════════════════════ RESULTS -->
+<div class="section">
+  <div class="section-title">Results panel</div>
+  <div class="section-h2">Six result renderers, one sliding panel</div>
+  <div class="section-sub">Auto-detected by result type. Slides in as a side drawer or expands to a centre modal with Summary / Data / Downloads / Raw tabs.</div>
+
+  <div class="results-grid">
+
+    <div class="result-card">
+      <div class="rc-icon">🧬</div>
+      <h4>HLA Alleles</h4>
+      <p>Locus-colour-coded allele cards. Class I / II grouping. Horizontal bar chart per gene. Copy-paste ready.</p>
+    </div>
+
+    <div class="result-card">
+      <div class="rc-icon">🔬</div>
+      <h4>VCF Variants</h4>
+      <p>Stat cards (total · PASS · SNP/INDEL). Donut chart. Sortable + filterable table. First 500 variants shown.</p>
+    </div>
+
+    <div class="result-card">
+      <div class="rc-icon">📉</div>
+      <h4>Volcano Plot</h4>
+      <p>SVG scatter for DE tables. Up / down / n.s. colouring. Significance &amp; fold-change thresholds displayed.</p>
+    </div>
+
+    <div class="result-card">
+      <div class="rc-icon">📋</div>
+      <h4>Count Matrix / Table</h4>
+      <p>Generic sortable, searchable, paginated table. CSV &amp; TSV auto-detected. Volcano rendered when DE columns present.</p>
+    </div>
+
+    <div class="result-card">
+      <div class="rc-icon">📄</div>
+      <h4>HTML Report</h4>
+      <p>MultiQC, Snakemake, or any HTML report. Summary card + "View Report" button that opens in a sandboxed iframe.</p>
+    </div>
+
+    <div class="result-card">
+      <div class="rc-icon">📦</div>
+      <h4>File List</h4>
+      <p>Emoji-icon per MIME type. File description, path, size. One-click presigned download or "Open" for HTML reports.</p>
+    </div>
+
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════════════════════ ARCHITECTURE -->
+<div class="section">
+  <div class="section-title">System architecture</div>
+  <div class="section-h2">Layered, cloud-native, containerised</div>
+  <div class="section-sub">Every layer is independently replaceable via environment variables — swap mock runners for real AWS Batch without touching application code.</div>
+
+  <div class="arch-wrap">
+
+    <!-- Layer: Client -->
+    <div class="layer-label" style="color:#64748b;">CLIENT</div>
+    <div class="arch-layer">
+      <div class="arch-box" style="background:#1e3a5f;color:#bfdbfe;">
+        <div class="icon">⚛️</div>
+        <div class="label">React + @xyflow/react v12</div>
+        <div class="sub">Pipeline Builder canvas<br/>Node palette · Spotlight</div>
+      </div>
+      <div class="arch-box" style="background:#1e3a5f;color:#bfdbfe;">
+        <div class="icon">📊</div>
+        <div class="label">Results Panel</div>
+        <div class="sub">HLA · VCF · Table<br/>Volcano · HTML · Files</div>
+      </div>
+      <div class="arch-box" style="background:#1e3a5f;color:#bfdbfe;">
+        <div class="icon">📱</div>
+        <div class="label">Job History & Progress</div>
+        <div class="sub">Live logs · Cancel<br/>Retry · Status polling</div>
+      </div>
+    </div>
+
+    <div class="arch-arrow">↕</div>
+    <div class="arch-arrow-label" style="color:#475569;font-size:11px;">REST API · JSON · Presigned URLs</div>
+
+    <!-- Layer: API -->
+    <div class="layer-label" style="color:#64748b;">API</div>
+    <div class="arch-layer">
+      <div class="arch-box" style="background:#1a2744;color:#a5b4fc;">
+        <div class="icon">🚀</div>
+        <div class="label">FastAPI</div>
+        <div class="sub">Auth · Jobs · Pipelines<br/>Uploads · Payments</div>
+      </div>
+      <div class="arch-box" style="background:#1a2744;color:#a5b4fc;">
+        <div class="icon">🗄️</div>
+        <div class="label">PostgreSQL + SQLAlchemy</div>
+        <div class="sub">9 Alembic migrations<br/>Async sessions</div>
+      </div>
+      <div class="arch-box" style="background:#1a2744;color:#a5b4fc;">
+        <div class="icon">⚡</div>
+        <div class="label">Redis</div>
+        <div class="sub">Celery broker<br/>Log buffer · Batch tracker</div>
+      </div>
+      <div class="arch-box" style="background:#1a2744;color:#a5b4fc;">
+        <div class="icon">💳</div>
+        <div class="label">Stripe</div>
+        <div class="sub">Checkout · Webhooks<br/>Redis metadata store</div>
+      </div>
+    </div>
+
+    <div class="arch-arrow">↕</div>
+    <div class="arch-arrow-label" style="color:#475569;font-size:11px;">Celery task queue</div>
+
+    <!-- Layer: Workers -->
+    <div class="layer-label" style="color:#64748b;">WORKERS</div>
+    <div class="arch-layer">
+      <div class="arch-box" style="background:#162032;color:#6ee7b7;">
+        <div class="icon">🟢</div>
+        <div class="label">Nextflow Runner</div>
+        <div class="sub">nf-core pipelines<br/>Samplesheet generator</div>
+      </div>
+      <div class="arch-box" style="background:#162032;color:#6ee7b7;">
+        <div class="icon">🟡</div>
+        <div class="label">Snakemake Runner</div>
+        <div class="sub">Wrappers + Workflows<br/>Snakefile generator</div>
+      </div>
+      <div class="arch-box" style="background:#162032;color:#6ee7b7;">
+        <div class="icon">🟣</div>
+        <div class="label">BioScript Runner</div>
+        <div class="sub">User bash script<br/>bioplatform_helpers.sh</div>
+      </div>
+      <div class="arch-box" style="background:#162032;color:#6ee7b7;">
+        <div class="icon">🩵</div>
+        <div class="label">Custom Runner</div>
+        <div class="sub">SPAdes · Kraken2<br/>Prokka · IQ-TREE · Flye</div>
+      </div>
+    </div>
+
+    <div class="arch-arrow">↕</div>
+    <div class="arch-arrow-label" style="color:#475569;font-size:11px;">AWS SDK · boto3</div>
+
+    <!-- Layer: Cloud -->
+    <div class="layer-label" style="color:#64748b;">CLOUD (AWS)</div>
+    <div class="arch-layer">
+      <div class="arch-box" style="background:#0f1f30;color:#93c5fd;">
+        <div class="icon">☁️</div>
+        <div class="label">AWS Batch</div>
+        <div class="sub">SPOT compute env<br/>2 job queues</div>
+      </div>
+      <div class="arch-box" style="background:#0f1f30;color:#93c5fd;">
+        <div class="icon">🪣</div>
+        <div class="label">S3</div>
+        <div class="sub">Uploads · Results<br/>Presigned PUT/GET</div>
+      </div>
+      <div class="arch-box" style="background:#0f1f30;color:#93c5fd;">
+        <div class="icon">📦</div>
+        <div class="label">ECR</div>
+        <div class="sub">Nextflow worker<br/>bioplatform/tools</div>
+      </div>
+      <div class="arch-box" style="background:#0f1f30;color:#93c5fd;">
+        <div class="icon">🌐</div>
+        <div class="label">CloudFront + S3</div>
+        <div class="sub">Frontend CDN<br/>Vite build deploy</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════════════════════ INFRA + TECH -->
+<div class="section">
+  <div class="section-title">Infrastructure & DevOps</div>
+  <div class="section-h2">Production-ready from day one</div>
+  <div class="section-sub">Terraform provisions the full AWS stack. GitHub Actions handles CI/CD from lint to CloudFront deploy.</div>
+
+  <div class="infra-cols">
+
+    <div class="infra-panel">
+      <h4>🔁 CI / CD Pipeline</h4>
+      <div class="infra-row">
+        <div class="infra-dot" style="background:#22c55e;"></div>
+        <div class="infra-row-text">ruff + mypy — backend lint &amp; type check</div>
+        <div class="infra-row-tag" style="background:#14532d;color:#bbf7d0;">PR gate</div>
+      </div>
+      <div class="infra-row">
+        <div class="infra-dot" style="background:#22c55e;"></div>
+        <div class="infra-row-text">pytest (154 tests) — unit + integration</div>
+        <div class="infra-row-tag" style="background:#14532d;color:#bbf7d0;">PR gate</div>
+      </div>
+      <div class="infra-row">
+        <div class="infra-dot" style="background:#22c55e;"></div>
+        <div class="infra-row-text">tsc --noEmit + ESLint + Vite build</div>
+        <div class="infra-row-tag" style="background:#14532d;color:#bbf7d0;">PR gate</div>
+      </div>
+      <div class="infra-row">
+        <div class="infra-dot" style="background:#3b82f6;"></div>
+        <div class="infra-row-text">ECR push (worker + tools images)</div>
+        <div class="infra-row-tag" style="background:#1e3a8a;color:#bfdbfe;">main</div>
+      </div>
+      <div class="infra-row">
+        <div class="infra-dot" style="background:#3b82f6;"></div>
+        <div class="infra-row-text">Alembic migration via Batch job</div>
+        <div class="infra-row-tag" style="background:#1e3a8a;color:#bfdbfe;">main</div>
+      </div>
+      <div class="infra-row">
+        <div class="infra-dot" style="background:#3b82f6;"></div>
+        <div class="infra-row-text">S3 sync + CloudFront invalidation</div>
+        <div class="infra-row-tag" style="background:#1e3a8a;color:#bfdbfe;">main</div>
+      </div>
+    </div>
+
+    <div class="infra-panel">
+      <h4>🏗️ Terraform Resources</h4>
+      <div class="infra-row">
+        <div class="infra-dot" style="background:#f59e0b;"></div>
+        <div class="infra-row-text">S3 bucket — uploads + results + frontend</div>
+      </div>
+      <div class="infra-row">
+        <div class="infra-dot" style="background:#f59e0b;"></div>
+        <div class="infra-row-text">IAM roles — Batch, ECR, S3 read/write</div>
+      </div>
+      <div class="infra-row">
+        <div class="infra-dot" style="background:#f59e0b;"></div>
+        <div class="infra-row-text">AWS Batch — SPOT compute env + 2 queues</div>
+      </div>
+      <div class="infra-row">
+        <div class="infra-dot" style="background:#f59e0b;"></div>
+        <div class="infra-row-text">ECR repos — worker &amp; tools images</div>
+      </div>
+      <div class="infra-row">
+        <div class="infra-dot" style="background:#f59e0b;"></div>
+        <div class="infra-row-text">CloudFront distribution — global CDN</div>
+      </div>
+      <div class="infra-row">
+        <div class="infra-dot" style="background:#f59e0b;"></div>
+        <div class="infra-row-text">Outputs — all ARNs &amp; endpoints exported</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════════════════════ TECH STACK -->
+<div class="section">
+  <div class="section-title">Tech stack</div>
+  <div class="section-h2">Battle-tested, open-source foundations</div>
+  <div class="section-sub"></div>
+
+  <div class="stack-grid">
+
+    <div class="stack-group">
+      <h4>Frontend</h4>
+      <div class="stack-items">
+        <span class="stack-tag hi">React 18</span>
+        <span class="stack-tag hi">TypeScript</span>
+        <span class="stack-tag hi">@xyflow/react v12</span>
+        <span class="stack-tag">Vite</span>
+        <span class="stack-tag">Axios</span>
+        <span class="stack-tag">SVG charts</span>
+        <span class="stack-tag">CSS-in-JS inline</span>
+        <span class="stack-tag">ESLint</span>
+      </div>
+    </div>
+
+    <div class="stack-group">
+      <h4>Backend</h4>
+      <div class="stack-items">
+        <span class="stack-tag hi">FastAPI</span>
+        <span class="stack-tag hi">SQLAlchemy 2 (async)</span>
+        <span class="stack-tag hi">Celery 5</span>
+        <span class="stack-tag">PostgreSQL 16</span>
+        <span class="stack-tag">Redis 7</span>
+        <span class="stack-tag">Alembic</span>
+        <span class="stack-tag">python-jose (JWT)</span>
+        <span class="stack-tag">slowapi</span>
+        <span class="stack-tag">Stripe SDK</span>
+        <span class="stack-tag">boto3</span>
+        <span class="stack-tag">ruff · mypy</span>
+        <span class="stack-tag">pytest · httpx</span>
+      </div>
+    </div>
+
+    <div class="stack-group">
+      <h4>Infrastructure</h4>
+      <div class="stack-items">
+        <span class="stack-tag hi">Docker + Compose</span>
+        <span class="stack-tag hi">Terraform</span>
+        <span class="stack-tag hi">GitHub Actions</span>
+        <span class="stack-tag">AWS Batch (SPOT)</span>
+        <span class="stack-tag">AWS S3</span>
+        <span class="stack-tag">AWS ECR</span>
+        <span class="stack-tag">CloudFront</span>
+      </div>
+    </div>
+
+    <div class="stack-group">
+      <h4>Bio Tools (Docker image)</h4>
+      <div class="stack-items">
+        <span class="stack-tag hi">Nextflow 24.10</span>
+        <span class="stack-tag hi">Snakemake ≥ 8.20</span>
+        <span class="stack-tag">samtools · bwa</span>
+        <span class="stack-tag">fastp · bcftools</span>
+        <span class="stack-tag">STAR · featureCounts</span>
+        <span class="stack-tag">MultiQC</span>
+        <span class="stack-tag">SPAdes</span>
+        <span class="stack-tag">Kraken2 · Bracken</span>
+        <span class="stack-tag">Prokka</span>
+        <span class="stack-tag">MAFFT · IQ-TREE 2</span>
+        <span class="stack-tag">Flye · NanoStat</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════ FOOTER -->
+<footer class="footer">
+  <p><strong>Bioinformatics Pipeline Platform</strong> &nbsp;·&nbsp; Full-stack · Cloud-native · Open architecture</p>
+  <p style="margin-top:8px;">FastAPI · React · @xyflow/react · AWS Batch · Terraform · Stripe</p>
+</footer>
+
+</body>
+</html>

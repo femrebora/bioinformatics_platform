@@ -15,13 +15,60 @@ class Settings(BaseSettings):
     STORAGE_BACKEND: str = "local"       # local | s3
     EC2_BACKEND: str = "mock"            # mock | aws
     HLA_BACKEND: str = "mock"            # mock | hlahd
-    NEXTFLOW_BACKEND: str = "mock"       # mock | nextflow
+    NEXTFLOW_BACKEND: str = "mock"       # mock | awsbatch
+    SNAKEMAKE_BACKEND: str = "mock"      # mock | awsbatch
+    BIOSCRIPT_BACKEND: str = "mock"      # mock | awsbatch
+    CUSTOM_BACKEND: str = "mock"         # mock | awsbatch
 
     # Local uploads directory
     UPLOADS_DIR: str = "/uploads"
 
-    # Public base URL for generating upload URLs
+    # Public base URL for generating upload URLs (used by local backend only)
     PUBLIC_BASE_URL: str = "http://localhost:8000"
+
+    # AWS / S3
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    AWS_REGION: str = "us-east-1"
+    S3_BUCKET: str = ""
+    S3_PRESIGN_EXPIRY: int = 900   # 15 minutes
+
+    # AWS Batch / Nextflow
+    BATCH_JOB_QUEUE: str = "bioplatform-default"
+    BATCH_JOB_ROLE_ARN: str = ""        # IAM role assumed by each Batch job container
+    BATCH_INSTANCE_TYPE: str = "optimal" # informational label stored in results
+
+    # Snakemake AWS Batch
+    SNAKEMAKE_BATCH_QUEUE: str = ""      # defaults to BATCH_JOB_QUEUE if empty
+    SNAKEMAKE_CONTAINER_IMAGE: str = "snakemake/snakemake:v8.20.0"
+
+    # BioScript (bash runner)
+    BIOSCRIPT_DOCKER_IMAGE: str = "bioplatform/tools:latest"  # custom image with bio tools
+
+    # Auth / JWT
+    JWT_SECRET: str = "change-this-secret-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRY_MINUTES: int = 60 * 24 * 7   # 7 days
+
+    # CORS — comma-separated list of allowed origins
+    ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+
+    # Stripe
+    STRIPE_SECRET_KEY: str = ""           # sk_test_... or sk_live_...
+    STRIPE_WEBHOOK_SECRET: str = ""       # whsec_...
+    APP_BASE_URL: str = "http://localhost:5173"  # where Stripe redirects after payment
+
+    # Email notifications
+    EMAIL_PROVIDER: str = "log"          # log | ses | smtp
+    EMAIL_FROM: str = "noreply@bioplatform.io"
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SES_REGION: str = ""                 # defaults to AWS_REGION if empty
+
+    # Runtime mode
+    DEBUG: bool = True
 
 
 settings = Settings()

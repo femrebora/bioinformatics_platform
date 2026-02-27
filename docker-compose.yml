@@ -39,7 +39,22 @@ services:
       EC2_BACKEND: ${EC2_BACKEND:-mock}
       HLA_BACKEND: ${HLA_BACKEND:-mock}
       NEXTFLOW_BACKEND: ${NEXTFLOW_BACKEND:-mock}
+      SNAKEMAKE_BACKEND: ${SNAKEMAKE_BACKEND:-mock}
+      BIOSCRIPT_BACKEND: ${BIOSCRIPT_BACKEND:-mock}
+      CUSTOM_BACKEND: ${CUSTOM_BACKEND:-mock}
       UPLOADS_DIR: /uploads
+      JWT_SECRET: ${JWT_SECRET:-changeme-replace-in-production-with-a-random-secret}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:5173}
+      SNAKEMAKE_BATCH_QUEUE: ${SNAKEMAKE_BATCH_QUEUE:-}
+      SNAKEMAKE_CONTAINER_IMAGE: ${SNAKEMAKE_CONTAINER_IMAGE:-snakemake/snakemake:v8.20.0}
+      BIOSCRIPT_DOCKER_IMAGE: ${BIOSCRIPT_DOCKER_IMAGE:-bioplatform/tools:latest}
     volumes:
       - uploads_data:/uploads
       - ./backend:/app
@@ -53,7 +68,9 @@ services:
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
   worker:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
     environment:
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-bioplatform}:${POSTGRES_PASSWORD:-bioplatform}@postgres:5432/${POSTGRES_DB:-bioplatform}
       CELERY_BROKER_URL: redis://redis:6379/0
@@ -62,7 +79,20 @@ services:
       EC2_BACKEND: ${EC2_BACKEND:-mock}
       HLA_BACKEND: ${HLA_BACKEND:-mock}
       NEXTFLOW_BACKEND: ${NEXTFLOW_BACKEND:-mock}
+      SNAKEMAKE_BACKEND: ${SNAKEMAKE_BACKEND:-mock}
+      BIOSCRIPT_BACKEND: ${BIOSCRIPT_BACKEND:-mock}
+      CUSTOM_BACKEND: ${CUSTOM_BACKEND:-mock}
       UPLOADS_DIR: /uploads
+      JWT_SECRET: ${JWT_SECRET:-changeme-replace-in-production-with-a-random-secret}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-}
+      BATCH_JOB_QUEUE: ${BATCH_JOB_QUEUE:-bioplatform-default}
+      BATCH_JOB_ROLE_ARN: ${BATCH_JOB_ROLE_ARN:-}
+      SNAKEMAKE_BATCH_QUEUE: ${SNAKEMAKE_BATCH_QUEUE:-}
+      SNAKEMAKE_CONTAINER_IMAGE: ${SNAKEMAKE_CONTAINER_IMAGE:-snakemake/snakemake:v8.20.0}
+      BIOSCRIPT_DOCKER_IMAGE: ${BIOSCRIPT_DOCKER_IMAGE:-bioplatform/tools:latest}
     volumes:
       - uploads_data:/uploads
       - ./backend:/app
@@ -71,7 +101,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=4
 
   frontend:
     build: ./frontend

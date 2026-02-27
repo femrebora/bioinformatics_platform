@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from app.api.v1.deps import get_current_user
 from app.database import get_db
 from app.models.pipeline import Pipeline
+from app.models.user import User
 from app.schemas.pipeline import (
     PipelineCreate,
     PipelineUpdate,
@@ -28,12 +30,17 @@ def _serialize_pipeline(pipeline: Pipeline) -> PipelineResponse:
 
 
 @router.post("", response_model=PipelineResponse, status_code=201)
-async def create_pipeline(body: PipelineCreate, db: AsyncSession = Depends(get_db)):
+async def create_pipeline(
+    body: PipelineCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     now = datetime.now(timezone.utc)
     pipeline = Pipeline(
         id=str(uuid.uuid4()),
         name=body.name,
         graph=body.graph.model_dump(),
+        user_id=current_user.id,
         created_at=now,
         updated_at=now,
     )
@@ -44,8 +51,15 @@ async def create_pipeline(body: PipelineCreate, db: AsyncSession = Depends(get_d
 
 
 @router.get("", response_model=list[PipelineListItem])
-async def list_pipelines(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Pipeline).order_by(Pipeline.created_at.desc()))
+async def list_pipelines(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Pipeline)
+        .where(Pipeline.user_id == current_user.id)
+        .order_by(Pipeline.created_at.desc())
+    )
     pipelines = result.scalars().all()
     return [
         PipelineListItem(
@@ -59,21 +73,28 @@ async def list_pipelines(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{pipeline_id}", response_model=PipelineResponse)
-async def get_pipeline(pipeline_id: str, db: AsyncSession = Depends(get_db)):
+async def get_pipeline(
+    pipeline_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     result = await db.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
     pipeline = result.scalar_one_or_none()
-    if pipeline is None:
+    if pipeline is None or pipeline.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Pipeline not found.")
     return _serialize_pipeline(pipeline)
 
 
 @router.put("/{pipeline_id}", response_model=PipelineResponse)
 async def update_pipeline(
-    pipeline_id: str, body: PipelineUpdate, db: AsyncSession = Depends(get_db)
+    pipeline_id: str,
+    body: PipelineUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     result = await db.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
     pipeline = result.scalar_one_or_none()
-    if pipeline is None:
+    if pipeline is None or pipeline.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Pipeline not found.")
 
     if body.name is not None:
@@ -88,10 +109,14 @@ async def update_pipeline(
 
 
 @router.delete("/{pipeline_id}", status_code=204)
-async def delete_pipeline(pipeline_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_pipeline(
+    pipeline_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     result = await db.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
     pipeline = result.scalar_one_or_none()
-    if pipeline is None:
+    if pipeline is None or pipeline.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Pipeline not found.")
     await db.delete(pipeline)
     await db.commit()

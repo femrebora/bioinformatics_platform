@@ -32,3 +32,8 @@ class Job(Base):
     )
     celery_task_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     pipeline_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    user_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    stripe_session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    storage_key_r2: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    workflow_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    job_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)

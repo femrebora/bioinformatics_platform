@@ -1,0 +1,43 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Java 17 is required by Nextflow 24.x
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev gcc curl openjdk-17-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Nextflow fat JAR (includes core engine; nf-amazon installed below)
+ENV NXF_VER=24.10.2
+RUN curl -fsSL \
+    "https://github.com/nextflow-io/nextflow/releases/download/v${NXF_VER}/nextflow-${NXF_VER}-all" \
+    -o /usr/local/bin/nextflow \
+    && chmod +x /usr/local/bin/nextflow
+
+# Persistent plugin cache so nf-amazon survives container restarts
+ENV NXF_HOME=/opt/nextflow-home
+RUN mkdir -p /opt/nextflow-home
+
+# Pre-bake nf-amazon plugin (required for AWS Batch + S3 native client)
+RUN NXF_HOME=/opt/nextflow-home nextflow plugin install nf-amazon || true
+
+# Optionally pre-pull pinned pipeline versions to avoid GitHub fetch at runtime.
+# Uncomment after confirming which pipelines you'll offer:
+# RUN NXF_HOME=/opt/nextflow-home nextflow pull nf-core/rnaseq -r 3.14.0
+# RUN NXF_HOME=/opt/nextflow-home nextflow pull nf-core/sarek  -r 3.4.4
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install Snakemake + AWS Batch executor plugin
+# snakemake-executor-plugin-aws-batch requires snakemake >=8
+RUN pip install --no-cache-dir \
+    "snakemake>=8.20.0,<9" \
+    "snakemake-executor-plugin-aws-batch>=0.3" \
+    "snakemake-storage-plugin-s3>=0.3"
+
+COPY . .
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64

@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { NfCoreModule, NfCorePipeline } from "../types/nfcore";
+import type { SnakemakeWrapper } from "../types/snakemake";
 import { fetchNfcoreModules, fetchNfcorePipelines } from "../api/nfcoreClient";
+import { fetchWrappers } from "../api/snakemakeClient";
 import { PIPELINE_TEMPLATES, type PipelineTemplate } from "./templates";
 
 // ── Action types ──────────────────────────────────────────────────────────
@@ -15,7 +17,8 @@ type CommandAction = {
 type TemplateAction = { kind: "template"; template: PipelineTemplate };
 type ModuleAction   = { kind: "module";   module:   NfCoreModule      };
 type PipelineAction = { kind: "pipeline"; pipeline: NfCorePipeline    };
-type SpotlightItem  = CommandAction | TemplateAction | ModuleAction | PipelineAction;
+type WrapperAction  = { kind: "wrapper";  wrapper:  SnakemakeWrapper  };
+type SpotlightItem  = CommandAction | TemplateAction | ModuleAction | PipelineAction | WrapperAction;
 
 const COMMANDS: CommandAction[] = [
   { kind: "command", id: "new",       label: "New Pipeline",     description: "Clear canvas and start fresh",         icon: "✨" },
@@ -29,11 +32,12 @@ const COMMANDS: CommandAction[] = [
 // ── Props ─────────────────────────────────────────────────────────────────
 
 interface SpotlightProps {
-  onClose:       () => void;
-  onCommand:     (id: string) => void;
-  onTemplate:    (template: PipelineTemplate) => void;
-  onAddModule:   (module: NfCoreModule) => void;
-  onAddPipeline: (pipeline: NfCorePipeline) => void;
+  onClose:        () => void;
+  onCommand:      (id: string) => void;
+  onTemplate:     (template: PipelineTemplate) => void;
+  onAddModule:    (module: NfCoreModule) => void;
+  onAddPipeline:  (pipeline: NfCorePipeline) => void;
+  onAddWrapper:   (wrapper: SnakemakeWrapper) => void;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────
@@ -44,10 +48,12 @@ export function Spotlight({
   onTemplate,
   onAddModule,
   onAddPipeline,
+  onAddWrapper,
 }: SpotlightProps) {
   const [query,     setQuery]     = useState("");
   const [modules,   setModules]   = useState<NfCoreModule[]>([]);
   const [pipelines, setPipelines] = useState<NfCorePipeline[]>([]);
+  const [wrappers,  setWrappers]  = useState<SnakemakeWrapper[]>([]);
   const [loading,   setLoading]   = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
 
@@ -63,17 +69,20 @@ export function Spotlight({
     if (query.length < 2) {
       setModules([]);
       setPipelines([]);
+      setWrappers([]);
       return;
     }
     setLoading(true);
     timerRef.current = setTimeout(async () => {
       try {
-        const [mods, pipes] = await Promise.all([
+        const [mods, pipes, wraps] = await Promise.all([
           fetchNfcoreModules(query, undefined, 8),
           fetchNfcorePipelines(query),
+          fetchWrappers(query, undefined, 8),
         ]);
         setModules(mods.slice(0, 6));
         setPipelines(pipes.slice(0, 4));
+        setWrappers(wraps.slice(0, 6));
       } catch {
         // silently ignore network errors in spotlight
       } finally {
@@ -84,7 +93,7 @@ export function Spotlight({
   }, [query]);
 
   // Reset cursor when results change
-  useEffect(() => { setActiveIdx(0); }, [query, modules.length, pipelines.length]);
+  useEffect(() => { setActiveIdx(0); }, [query, modules.length, pipelines.length, wrappers.length]);
 
   // ── Build filtered sections ─────────────────────────────────────────────
 
@@ -103,10 +112,11 @@ export function Spotlight({
   );
 
   const sections: Array<{ heading: string; items: SpotlightItem[] }> = [];
-  if (filteredCommands.length)  sections.push({ heading: "Commands",         items: filteredCommands });
-  if (filteredTemplates.length) sections.push({ heading: "Templates",        items: filteredTemplates.map((t) => ({ kind: "template" as const, template: t })) });
-  if (modules.length)           sections.push({ heading: "nf-core Modules",  items: modules.map((m)   => ({ kind: "module"   as const, module:   m })) });
-  if (pipelines.length)         sections.push({ heading: "nf-core Pipelines",items: pipelines.map((p) => ({ kind: "pipeline" as const, pipeline: p })) });
+  if (filteredCommands.length)  sections.push({ heading: "Commands",              items: filteredCommands });
+  if (filteredTemplates.length) sections.push({ heading: "Templates",             items: filteredTemplates.map((t) => ({ kind: "template" as const, template: t })) });
+  if (wrappers.length)          sections.push({ heading: "Snakemake Wrappers",    items: wrappers.map((w)  => ({ kind: "wrapper"  as const, wrapper:  w })) });
+  if (modules.length)           sections.push({ heading: "nf-core Modules",       items: modules.map((m)   => ({ kind: "module"   as const, module:   m })) });
+  if (pipelines.length)         sections.push({ heading: "nf-core Pipelines",     items: pipelines.map((p) => ({ kind: "pipeline" as const, pipeline: p })) });
 
   const allItems: SpotlightItem[] = sections.flatMap((s) => s.items);
 
@@ -123,6 +133,7 @@ export function Spotlight({
   function handleSelect(item: SpotlightItem) {
     if      (item.kind === "command")  { onCommand(item.id);           onClose(); }
     else if (item.kind === "template") { onTemplate(item.template);    onClose(); }
+    else if (item.kind === "wrapper")  { onAddWrapper(item.wrapper);   onClose(); }
     else if (item.kind === "module")   { onAddModule(item.module);     onClose(); }
     else if (item.kind === "pipeline") { onAddPipeline(item.pipeline); onClose(); }
   }
@@ -236,6 +247,18 @@ function ItemContent({ item }: { item: SpotlightItem }) {
             <span key={t} style={s.tag}>{t}</span>
           ))}
         </div>
+      </>
+    );
+  }
+  if (item.kind === "wrapper") {
+    return (
+      <>
+        <span style={s.itemIcon}>🐍</span>
+        <div style={s.itemText}>
+          <span style={s.itemLabel}>{item.wrapper.id}</span>
+          <span style={s.itemDesc}>{item.wrapper.description ?? item.wrapper.category}</span>
+        </div>
+        <span style={{ ...s.badge, background: "#fef3c7", color: "#92400e" }}>Wrapper</span>
       </>
     );
   }

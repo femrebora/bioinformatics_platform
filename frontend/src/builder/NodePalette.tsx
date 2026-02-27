@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { useNfcoreModules } from "../hooks/useNfcoreModules";
 import { fetchNfcoreModules } from "../api/nfcoreClient";
+import { fetchWrappers, fetchWorkflows, fetchWrapperCategories, fetchSnakemakeStatus } from "../api/snakemakeClient";
 import type { NfCoreModule, NfCorePipeline } from "../types/nfcore";
+import type { SnakemakeWrapper, SnakemakeWorkflow, SnakemakeCatalogStatus, SnakemakeCatalogCategory } from "../types/snakemake";
 
 interface NodePaletteProps {
   onExpandPipeline: (pipelineId: string) => Promise<void>;
@@ -16,22 +18,53 @@ interface PaletteCard {
   headerColor: string;
 }
 
+interface CustomToolCard {
+  tool: string;
+  label: string;
+  icon: string;
+  description: string;
+}
+
+const CUSTOM_TOOL_CARDS: CustomToolCard[] = [
+  { tool: "spades",  label: "De Novo Assembly",     icon: "🧩", description: "SPAdes + QUAST" },
+  { tool: "kraken2", label: "Metagenome Profiling",  icon: "🦠", description: "Kraken2 + Bracken" },
+  { tool: "prokka",  label: "Prokaryote Annotation", icon: "🔬", description: "Prokka" },
+  { tool: "iqtree",  label: "Phylogenomics",          icon: "🌳", description: "MAFFT + IQ-TREE 2" },
+  { tool: "flye",    label: "Long-read Assembly",    icon: "🔗", description: "Flye + NanoStat" },
+];
+
 const BUILTIN_CARDS: PaletteCard[] = [
   {
     type: "inputFile",
     label: "Input File",
     icon: "📂",
-    description: "FASTQ or BAM",
+    description: "FASTQ / BAM (paired-end ok)",
     borderColor: "#3b82f6",
     headerColor: "#3b82f6",
+  },
+  {
+    type: "sampleSheetBuilder",
+    label: "Sample Sheet",
+    icon: "🗂️",
+    description: "Multi-sample + conditions + strandedness",
+    borderColor: "#7c3aed",
+    headerColor: "#7c3aed",
+  },
+  {
+    type: "bioScript",
+    label: "BioScript",
+    icon: "⚡",
+    description: "Custom bash script w/ bio tools",
+    borderColor: "#7c3aed",
+    headerColor: "#7c3aed",
   },
   {
     type: "fastqToBam",
     label: "FASTQ → BAM",
     icon: "🔄",
     description: "Convert via samtools",
-    borderColor: "#7c3aed",
-    headerColor: "#7c3aed",
+    borderColor: "#6b7280",
+    headerColor: "#6b7280",
   },
   {
     type: "hlaTyping",
@@ -65,9 +98,29 @@ export function NodePalette({ onExpandPipeline }: NodePaletteProps) {
   const [searchLoading, setSearchLoading] = useState(false);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Snakemake state
+  const [smkStatus, setSmkStatus] = useState<SnakemakeCatalogStatus | null>(null);
+  const [smkWrapperQuery, setSmkWrapperQuery] = useState("");
+  const [smkWrapperResults, setSmkWrapperResults] = useState<SnakemakeWrapper[] | null>(null);
+  const [smkWrapperLoading, setSmkWrapperLoading] = useState(false);
+  const smkSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [smkCategories, setSmkCategories] = useState<SnakemakeCatalogCategory[]>([]);
+  const [smkExpandedCat, setSmkExpandedCat] = useState<string | null>(null);
+  const [smkCatWrappers, setSmkCatWrappers] = useState<Record<string, SnakemakeWrapper[]>>({});
+  const [smkCatLoading, setSmkCatLoading] = useState<string | null>(null);
+  const [smkWorkflows, setSmkWorkflows] = useState<SnakemakeWorkflow[]>([]);
+  const [smkWorkflowQuery, setSmkWorkflowQuery] = useState("");
+
   useEffect(() => {
     fetchCatalogMeta();
   }, [fetchCatalogMeta]);
+
+  // Load Snakemake status + categories once
+  useEffect(() => {
+    fetchSnakemakeStatus().then(setSmkStatus).catch(() => {});
+    fetchWrapperCategories().then(setSmkCategories).catch(() => {});
+    fetchWorkflows(undefined, 15).then(setSmkWorkflows).catch(() => {});
+  }, []);
 
   // Debounced module search
   useEffect(() => {
@@ -111,8 +164,101 @@ export function NodePalette({ onExpandPipeline }: NodePaletteProps) {
     }
   }
 
+  // Debounced Snakemake wrapper search
+  useEffect(() => {
+    if (smkSearchTimerRef.current) clearTimeout(smkSearchTimerRef.current);
+    if (smkWrapperQuery.trim().length < 2) {
+      setSmkWrapperResults(null);
+      return;
+    }
+    smkSearchTimerRef.current = setTimeout(async () => {
+      setSmkWrapperLoading(true);
+      try {
+        const results = await fetchWrappers(smkWrapperQuery.trim(), undefined, 30);
+        setSmkWrapperResults(results);
+      } catch {
+        setSmkWrapperResults([]);
+      } finally {
+        setSmkWrapperLoading(false);
+      }
+    }, 400);
+    return () => { if (smkSearchTimerRef.current) clearTimeout(smkSearchTimerRef.current); };
+  }, [smkWrapperQuery]);
+
+  // Debounced Snakemake workflow search
+  useEffect(() => {
+    if (smkWorkflowQuery.trim().length < 2) {
+      fetchWorkflows(undefined, 15).then(setSmkWorkflows).catch(() => {});
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const results = await fetchWorkflows(smkWorkflowQuery.trim(), 20);
+        setSmkWorkflows(results);
+      } catch { /* ignore */ }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [smkWorkflowQuery]);
+
+  async function handleSmkCategoryToggle(cat: string) {
+    if (smkExpandedCat === cat) {
+      setSmkExpandedCat(null);
+      return;
+    }
+    setSmkExpandedCat(cat);
+    if (!smkCatWrappers[cat]) {
+      setSmkCatLoading(cat);
+      try {
+        const wrappers = await fetchWrappers(undefined, cat, 100);
+        setSmkCatWrappers((prev) => ({ ...prev, [cat]: wrappers }));
+      } catch {
+        setSmkCatWrappers((prev) => ({ ...prev, [cat]: [] }));
+      } finally {
+        setSmkCatLoading(null);
+      }
+    }
+  }
+
+  function handleWrapperDragStart(e: React.DragEvent, wrapper: SnakemakeWrapper) {
+    e.dataTransfer.setData("nodeType", "snakemakeWrapper");
+    e.dataTransfer.setData(
+      "nodeData",
+      JSON.stringify({
+        label:        wrapper.id,
+        tool:         wrapper.tool,
+        subcommand:   wrapper.subcommand,
+        description:  wrapper.description,
+        category:     wrapper.category,
+        input_names:  wrapper.input_names,
+        output_names: wrapper.output_names,
+      })
+    );
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function handleWorkflowDragStart(e: React.DragEvent, wf: SnakemakeWorkflow) {
+    e.dataTransfer.setData("nodeType", "snakemakeWorkflow");
+    e.dataTransfer.setData(
+      "nodeData",
+      JSON.stringify({
+        label:       wf.name,
+        workflowId:  wf.id,
+        description: wf.description,
+        stars:       wf.stars,
+        topics:      wf.topics,
+      })
+    );
+    e.dataTransfer.effectAllowed = "move";
+  }
+
   function handleBuiltinDragStart(e: React.DragEvent, nodeType: string) {
     e.dataTransfer.setData("nodeType", nodeType);
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function handleCustomToolDragStart(e: React.DragEvent, card: CustomToolCard) {
+    e.dataTransfer.setData("nodeType", "customPipeline");
+    e.dataTransfer.setData("nodeData", JSON.stringify({ label: card.label, tool: card.tool }));
     e.dataTransfer.effectAllowed = "move";
   }
 
@@ -181,6 +327,25 @@ export function NodePalette({ onExpandPipeline }: NodePaletteProps) {
           style={{ ...styles.card, borderColor: card.borderColor }}
         >
           <div style={{ ...styles.cardHeader, background: card.headerColor }}>
+            <span style={styles.cardIcon}>{card.icon}</span>
+            <span style={styles.cardLabel}>{card.label}</span>
+          </div>
+          <div style={styles.cardDesc}>{card.description}</div>
+        </div>
+      ))}
+
+      <div style={styles.divider} />
+
+      {/* Custom Linux Pipelines */}
+      <div style={styles.sectionTitle}>Custom Pipelines</div>
+      {CUSTOM_TOOL_CARDS.map((card) => (
+        <div
+          key={card.tool}
+          draggable
+          onDragStart={(e) => handleCustomToolDragStart(e, card)}
+          style={{ ...styles.card, borderColor: "#0d9488" }}
+        >
+          <div style={{ ...styles.cardHeader, background: "#0d9488" }}>
             <span style={styles.cardIcon}>{card.icon}</span>
             <span style={styles.cardLabel}>{card.label}</span>
           </div>
@@ -338,6 +503,138 @@ export function NodePalette({ onExpandPipeline }: NodePaletteProps) {
         ))}
         {filteredPipelines.length === 0 && (
           <div style={styles.hint}>No pipelines</div>
+        )}
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* Snakemake Wrappers */}
+      <div style={styles.sectionTitle}>
+        Snakemake Wrappers
+        {smkStatus && <span style={{ ...styles.countBadge, background: "#fef3c7", color: "#92400e" }}>{smkStatus.wrappers}</span>}
+      </div>
+
+      <input
+        type="text"
+        placeholder="Search wrappers…"
+        value={smkWrapperQuery}
+        onChange={(e) => setSmkWrapperQuery(e.target.value)}
+        style={styles.searchInput}
+      />
+
+      {!smkStatus?.ready && (
+        <div style={styles.notReady}>Catalog loading in background…</div>
+      )}
+
+      {smkWrapperQuery.trim().length >= 2 ? (
+        smkWrapperLoading ? (
+          <div style={styles.hint}>Searching…</div>
+        ) : (smkWrapperResults ?? []).length === 0 ? (
+          <div style={styles.hint}>No results</div>
+        ) : (
+          <div style={styles.itemList}>
+            {(smkWrapperResults ?? []).map((w) => (
+              <div
+                key={w.id}
+                draggable
+                onDragStart={(e) => handleWrapperDragStart(e, w)}
+                style={styles.moduleItem}
+                title={w.description ?? w.id}
+              >
+                <span style={styles.moduleIcon}>🐍</span>
+                <div style={styles.moduleInfo}>
+                  <div style={{ ...styles.moduleId, color: "#d97706" }}>{w.id}</div>
+                  <div style={styles.moduleCat}>{w.category}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      ) : (
+        <div style={styles.accordion}>
+          {smkCategories.map((cat) => {
+            const isExpanded = smkExpandedCat === cat.category;
+            return (
+              <div key={cat.category}>
+                <button
+                  style={{
+                    ...styles.catHeader,
+                    background: isExpanded ? "#fef9e7" : "none",
+                  }}
+                  onClick={() => handleSmkCategoryToggle(cat.category)}
+                >
+                  <span style={styles.catArrow}>{isExpanded ? "▼" : "▶"}</span>
+                  <span style={styles.catName}>{cat.category}</span>
+                  <span style={styles.catCount}>{cat.count}</span>
+                </button>
+                {isExpanded && (
+                  <div style={styles.catBody}>
+                    {smkCatLoading === cat.category ? (
+                      <div style={styles.hint}>Loading…</div>
+                    ) : (smkCatWrappers[cat.category] ?? []).length === 0 ? (
+                      <div style={styles.hint}>No wrappers</div>
+                    ) : (
+                      (smkCatWrappers[cat.category] ?? []).map((w) => (
+                        <div
+                          key={w.id}
+                          draggable
+                          onDragStart={(e) => handleWrapperDragStart(e, w)}
+                          style={styles.moduleItem}
+                          title={w.description ?? w.id}
+                        >
+                          <span style={styles.moduleIcon}>🐍</span>
+                          <div style={styles.moduleInfo}>
+                            <div style={{ ...styles.moduleId, color: "#d97706" }}>{w.id}</div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {smkCategories.length === 0 && (
+            <div style={styles.hint}>
+              {smkStatus?.ready ? "No categories" : "Waiting for catalog…"}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={styles.divider} />
+
+      {/* Snakemake Workflows */}
+      <div style={styles.sectionTitle}>
+        Snakemake Workflows
+        {smkStatus && <span style={{ ...styles.countBadge, background: "#fef3c7", color: "#92400e" }}>{smkStatus.workflows}</span>}
+      </div>
+
+      <input
+        type="text"
+        placeholder="Search workflows…"
+        value={smkWorkflowQuery}
+        onChange={(e) => setSmkWorkflowQuery(e.target.value)}
+        style={styles.searchInput}
+      />
+
+      <div style={styles.itemList}>
+        {smkWorkflows.map((wf) => (
+          <div
+            key={wf.id}
+            draggable
+            onDragStart={(e) => handleWorkflowDragStart(e, wf)}
+            style={{ ...styles.pipelineDragArea, border: "1px solid #fde68a", borderRadius: 4, background: "#fff", marginBottom: 2 }}
+            title={`Drag to add as workflow node\n${wf.description ?? ""}`}
+          >
+            <div style={{ ...styles.pipelineName, color: "#92400e" }}>{wf.name}</div>
+            {wf.stars > 0 && (
+              <div style={styles.pipelineStars}>⭐ {wf.stars.toLocaleString()}</div>
+            )}
+          </div>
+        ))}
+        {smkWorkflows.length === 0 && (
+          <div style={styles.hint}>No workflows</div>
         )}
       </div>
     </aside>

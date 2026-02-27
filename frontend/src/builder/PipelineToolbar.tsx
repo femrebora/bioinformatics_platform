@@ -44,9 +44,12 @@ export function PipelineToolbar({
   pipelineType,
 }: PipelineToolbarProps) {
   const badgeColors: Record<string, { bg: string; text: string; border: string }> = {
-    "HLA":     { bg: "#dbeafe", text: "#1d4ed8", border: "#bfdbfe" },
-    "nf-core": { bg: "#dcfce7", text: "#15803d", border: "#bbf7d0" },
-    "Mixed":   { bg: "#fef9c3", text: "#854d0e", border: "#fde68a" },
+    "HLA":       { bg: "#dbeafe", text: "#1d4ed8", border: "#bfdbfe" },
+    "nf-core":   { bg: "#dcfce7", text: "#15803d", border: "#bbf7d0" },
+    "Snakemake": { bg: "#fef3c7", text: "#92400e", border: "#fde68a" },
+    "BioScript": { bg: "#f3e8ff", text: "#6d28d9", border: "#e9d5ff" },
+    "Custom":    { bg: "#ccfbf1", text: "#0f766e", border: "#99f6e4" },
+    "Mixed":     { bg: "#fef9c3", text: "#854d0e", border: "#fde68a" },
   };
   const badge = pipelineType ? badgeColors[pipelineType] : null;
   return (

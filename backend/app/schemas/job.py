@@ -8,7 +8,10 @@ class JobCreate(BaseModel):
     file_type: str              # fastq | bam (or any nf-core-accepted format)
     tier: str                   # small | medium | large
     estimated_cost_usd: float
-    pipeline_id: Optional[str] = None   # None → HLA pipeline; set → nf-core pipeline
+    pipeline_id: Optional[str] = None   # None → HLA pipeline; set → nf-core/snakemake/bioscript
+    storage_key_r2: Optional[str] = None  # R2 read for paired-end FASTQ
+    workflow_config: Optional[Any] = None  # Snakemake/BioScript workflow configuration
+    job_name: Optional[str] = None        # Human-readable name set by user
 
 
 # ── Result schemas ────────────────────────────────────────────────────────
@@ -83,6 +86,9 @@ class JobResponse(BaseModel):
     tier: str
     estimated_cost_usd: float
     pipeline_id: Optional[str] = None
+    storage_key_r2: Optional[str] = None
+    workflow_config: Optional[Any] = None
+    job_name: Optional[str] = None
     created_at: Optional[datetime] = None
     result: Optional[Any]
     error: Optional[str]
@@ -97,6 +103,7 @@ class JobListResponse(BaseModel):
     tier: str
     estimated_cost_usd: float
     pipeline_id: Optional[str] = None
+    job_name: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

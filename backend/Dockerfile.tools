@@ -1,0 +1,138 @@
+###############################################################################
+# bioplatform/tools — Docker image with common bioinformatics tools
+#
+# Used by the BioScript runner for custom bash-based pipeline execution
+# on AWS Batch. Users write short bash scripts using the pre-installed
+# bio_helpers.sh library functions.
+#
+# Build:
+#   docker build -f Dockerfile.tools -t bioplatform/tools:latest .
+# Push:
+#   docker tag bioplatform/tools:latest <account>.dkr.ecr.<region>.amazonaws.com/bioplatform-tools:latest
+#   docker push <account>.dkr.ecr.<region>.amazonaws.com/bioplatform-tools:latest
+###############################################################################
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC
+
+# Base tools + bio packages available in Ubuntu 22.04 repos
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl wget ca-certificates \
+    python3 python3-pip \
+    # Core bio tools
+    samtools \
+    bcftools \
+    bwa \
+    minimap2 \
+    bedtools \
+    picard-tools \
+    # QC
+    fastqc \
+    # Compression
+    tabix \
+    pigz \
+    # Utilities
+    awscli \
+    jq \
+    parallel \
+    # Build deps (for pip-installed packages)
+    gcc g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# fastp (faster than trimmomatic, single binary)
+RUN curl -fsSL \
+    "https://github.com/OpenGene/fastp/releases/download/v0.23.4/fastp" \
+    -o /usr/local/bin/fastp \
+    && chmod +x /usr/local/bin/fastp
+
+# MultiQC + Bracken (Kraken2 post-processing)
+RUN pip3 install --no-cache-dir multiqc==1.21 bracken==2.9
+
+# STAR aligner
+ENV STAR_VERSION=2.7.11b
+RUN curl -fsSL \
+    "https://github.com/alexdobin/STAR/releases/download/${STAR_VERSION}/STAR_${STAR_VERSION}.tar.gz" \
+    | tar -xzC /tmp \
+    && mv /tmp/STAR-${STAR_VERSION}/bin/Linux_x86_64_static/STAR /usr/local/bin/ \
+    && rm -rf /tmp/STAR-${STAR_VERSION}
+
+# featureCounts (subread package)
+ENV SUBREAD_VERSION=2.0.6
+RUN curl -fsSL \
+    "https://sourceforge.net/projects/subread/files/subread-${SUBREAD_VERSION}/subread-${SUBREAD_VERSION}-Linux-x86_64.tar.gz/download" \
+    -o /tmp/subread.tar.gz \
+    && tar -xzf /tmp/subread.tar.gz -C /tmp \
+    && mv /tmp/subread-${SUBREAD_VERSION}-Linux-x86_64/bin/* /usr/local/bin/ \
+    && rm -rf /tmp/subread*
+
+# ── Custom pipeline tools ──────────────────────────────────────────────────
+
+# SPAdes (de novo genome assembler)
+ENV SPADES_VERSION=4.0.0
+RUN curl -fsSL \
+    "https://github.com/ablab/spades/releases/download/v${SPADES_VERSION}/SPAdes-${SPADES_VERSION}-Linux.tar.gz" \
+    | tar -xzC /tmp \
+    && mv /tmp/SPAdes-${SPADES_VERSION}-Linux /opt/spades \
+    && ln -s /opt/spades/bin/spades.py /usr/local/bin/spades.py
+
+# QUAST (genome assembly quality assessment)
+RUN pip3 install --no-cache-dir quast==5.2.0
+
+# Kraken2 (metagenomics classifier) — prebuilt binary
+ENV KRAKEN2_VERSION=2.1.3
+RUN curl -fsSL \
+    "https://github.com/DerrickWood/kraken2/archive/refs/tags/v${KRAKEN2_VERSION}.tar.gz" \
+    | tar -xzC /tmp \
+    && cd /tmp/kraken2-${KRAKEN2_VERSION} \
+    && bash install_kraken2.sh /usr/local/bin \
+    && rm -rf /tmp/kraken2-${KRAKEN2_VERSION}
+
+# KrakenTools + KronaTool (Krona HTML reports)
+RUN pip3 install --no-cache-dir krakentools==1.2 && \
+    curl -fsSL "https://github.com/marbl/Krona/releases/download/v2.8.1/KronaTools-2.8.1.tar" \
+    | tar -xC /tmp \
+    && cd /tmp/KronaTools-2.8.1 \
+    && bash install.pl --prefix /usr/local \
+    && rm -rf /tmp/KronaTools-2.8.1 \
+    # Suppress the taxonomy download (not needed for basic reports)
+    || true
+
+# Prokka (prokaryote genome annotation)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    prokka \
+    && rm -rf /var/lib/apt/lists/*
+
+# MAFFT (multiple sequence aligner)
+ENV MAFFT_VERSION=7.526
+RUN curl -fsSL \
+    "https://mafft.cbrc.jp/alignment/software/mafft-${MAFFT_VERSION}-without-extensions-src.tgz" \
+    | tar -xzC /tmp \
+    && cd /tmp/mafft-${MAFFT_VERSION}-without-extensions/core \
+    && make install \
+    && rm -rf /tmp/mafft-${MAFFT_VERSION}-without-extensions
+
+# IQ-TREE 2 (phylogenetic tree inference)
+ENV IQTREE_VERSION=2.3.6
+RUN curl -fsSL \
+    "https://github.com/iqtree/iqtree2/releases/download/v${IQTREE_VERSION}/iqtree-${IQTREE_VERSION}-Linux-intel.tar.gz" \
+    | tar -xzC /tmp \
+    && mv /tmp/iqtree-${IQTREE_VERSION}-Linux-intel/bin/iqtree2 /usr/local/bin/ \
+    && rm -rf /tmp/iqtree-${IQTREE_VERSION}-Linux-intel
+
+# Flye (long-read assembler — Nanopore / PacBio)
+RUN pip3 install --no-cache-dir flye==2.9.5
+
+# NanoStat (Nanopore QC statistics)
+RUN pip3 install --no-cache-dir nanostat==1.6.0
+
+# ── Install bio_helpers.sh library ────────────────────────────────────────
+COPY bioplatform_helpers.sh /usr/local/lib/bio_helpers.sh
+RUN chmod +r /usr/local/lib/bio_helpers.sh
+
+# Source helpers automatically in every bash session
+RUN echo '. /usr/local/lib/bio_helpers.sh' >> /etc/bash.bashrc
+
+WORKDIR /work
+
+CMD ["/bin/bash"]

@@ -1,7 +1,8 @@
 import os
 import uuid
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 
 from app.config import settings
@@ -21,7 +22,7 @@ async def presign_upload(body: PresignRequest):
     storage = get_storage_backend()
     upload_url = storage.generate_upload_url(storage_key)
 
-    tier_est = estimate(body.file_size_bytes)
+    tier_est = estimate(body.file_size_bytes, pipeline_id=None, n_samples=1)
 
     return PresignResponse(
         upload_url=upload_url,
@@ -30,6 +31,24 @@ async def presign_upload(body: PresignRequest):
         estimated_cost_usd=tier_est.cost_usd,
         tier_rationale=tier_est.rationale,
     )
+
+
+@router.get("/estimate")
+async def get_estimate(
+    pipeline_id: Optional[str] = Query(None),
+    file_size_bytes: int = Query(0, ge=0),
+    n_samples: int = Query(1, ge=1, le=10000),
+):
+    """Return a pipeline-aware cost estimate without creating an upload URL."""
+    est = estimate(file_size_bytes, pipeline_id=pipeline_id, n_samples=n_samples)
+    return {
+        "tier":                 est.tier,
+        "instance_type":        est.instance_type,
+        "estimated_cost_usd":   est.cost_usd,
+        "rationale":            est.rationale,
+        "estimated_hours":      est.estimated_hours,
+        "pipeline_description": est.pipeline_description,
+    }
 
 
 @router.put("/local/{filename}")

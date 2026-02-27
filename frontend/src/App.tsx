@@ -5,15 +5,19 @@ import { JobProgress } from "./components/JobProgress";
 import { ResultViewer } from "./components/ResultViewer";
 import { ResultsPanel } from "./components/ResultsPanel";
 import { JobHistory } from "./components/JobHistory";
+import { AuthGate } from "./components/AuthGate";
 import { PipelineBuilder } from "./builder/PipelineBuilder";
-import { createJob } from "./api/client";
+import { createJob, getSessionJob } from "./api/client";
+import { getStoredToken, clearToken, getMe } from "./api/authClient";
 import { useJobPoller } from "./hooks/useJobPoller";
 import type { PresignResponse, Tier } from "./types/job";
+import type { AuthUser } from "./types/auth";
 
 type AppState =
   | { phase: "idle" }
   | { phase: "uploading" }
   | { phase: "confirming"; presign: PresignResponse; filename: string; fileType: string }
+  | { phase: "awaiting_payment"; sessionId: string }
   | { phase: "processing"; jobId: string }
   | { phase: "done"; jobId: string }
   | { phase: "error"; message: string }
@@ -25,11 +29,41 @@ type AppState =
       filename: string;
       fileType: string;
       pipelineId: string | null;
+      storageKeyR2: string | null;
+      workflowConfig: unknown | null;
+      nSamples: number;
     };
 
 export default function App() {
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [state, setState] = useState<AppState>({ phase: "builder" });
   const [panelOpen, setPanelOpen] = useState(false);
+
+  // Restore session from localStorage on mount
+  useEffect(() => {
+    const token = getStoredToken();
+    if (!token) {
+      setAuthChecked(true);
+      return;
+    }
+    getMe(token)
+      .then((user) => {
+        setCurrentUser(user);
+        setAuthChecked(true);
+        // Check if Stripe redirected back with a session_id
+        const params = new URLSearchParams(window.location.search);
+        const sessionId = params.get("session_id");
+        if (sessionId) {
+          window.history.replaceState({}, "", "/"); // clean URL
+          setState({ phase: "awaiting_payment", sessionId });
+        }
+      })
+      .catch(() => {
+        clearToken();
+        setAuthChecked(true);
+      });
+  }, []);
 
   const jobId =
     state.phase === "processing" || state.phase === "done"
@@ -38,23 +72,41 @@ export default function App() {
 
   const job = useJobPoller(jobId);
 
-  // Transition processing → done when job completes
+  // Transition processing → done when job completes or is cancelled
   useEffect(() => {
     if (
       state.phase === "processing" &&
       job &&
-      (job.status === "completed" || job.status === "failed")
+      (job.status === "completed" || job.status === "failed" || job.status === "cancelled")
     ) {
       setState({ phase: "done", jobId: state.jobId });
     }
   }, [job, state.phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-open results panel when job finishes (for Quick Run tab)
+  // Auto-open results panel when job finishes
   useEffect(() => {
     if (job?.status === "completed" || job?.status === "failed") {
       setPanelOpen(true);
     }
   }, [job?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Poll for job after Stripe redirect
+  useEffect(() => {
+    if (state.phase !== "awaiting_payment") return;
+    const { sessionId } = state;
+    const interval = setInterval(async () => {
+      try {
+        const { job_id } = await getSessionJob(sessionId);
+        if (job_id) {
+          clearInterval(interval);
+          setState({ phase: "processing", jobId: job_id });
+        }
+      } catch {
+        // keep polling
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [state.phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for ResultsNode "View Results" button click
   useEffect(() => {
@@ -90,9 +142,21 @@ export default function App() {
     presign: PresignResponse,
     filename: string,
     fileType: string,
-    pipelineId: string | null
+    pipelineId: string | null,
+    storageKeyR2?: string | null,
+    workflowConfig?: unknown | null,
+    nSamples?: number,
   ) {
-    setState({ phase: "builder-confirming", presign, filename, fileType, pipelineId });
+    setState({
+      phase: "builder-confirming",
+      presign,
+      filename,
+      fileType,
+      pipelineId,
+      storageKeyR2: storageKeyR2 ?? null,
+      workflowConfig: workflowConfig ?? null,
+      nSamples: nSamples ?? 1,
+    });
   }
 
   async function handleBuilderConfirm(tier: Tier, estimatedCostUsd: number) {
@@ -103,7 +167,9 @@ export default function App() {
         state.fileType,
         tier,
         estimatedCostUsd,
-        state.pipelineId   // forwards the nf-core pipeline ID (or null for HLA)
+        state.pipelineId,
+        state.storageKeyR2,
+        state.workflowConfig,
       );
       setState({ phase: "processing", jobId: newJob.job_id });
     } catch (err: unknown) {
@@ -116,13 +182,44 @@ export default function App() {
     setState({ phase: "idle" });
   }
 
+  function handleSignOut() {
+    clearToken();
+    setCurrentUser(null);
+    setState({ phase: "builder" });
+  }
+
+  // Show nothing while we check the stored token
+  if (!authChecked) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <span style={{ color: "#64748b", fontSize: 14 }}>Loading…</span>
+      </div>
+    );
+  }
+
+  // Show auth wall if not signed in
+  if (!currentUser) {
+    return <AuthGate onAuthenticated={(token) => {
+      getMe(token).then(setCurrentUser);
+    }} />;
+  }
+
   const isBuilderPhase =
-    state.phase === "builder" || state.phase === "builder-confirming";
+    state.phase === "builder" ||
+    state.phase === "builder-confirming" ||
+    state.phase === "awaiting_payment";
   const isHistoryPhase = state.phase === "history";
 
   const confirmingState =
     state.phase === "builder-confirming"
-      ? { presign: state.presign, filename: state.filename }
+      ? {
+          presign: state.presign,
+          filename: state.filename,
+          pipelineId: state.pipelineId,
+          storageKeyR2: state.storageKeyR2,
+          workflowConfig: state.workflowConfig,
+          nSamples: state.nSamples,
+        }
       : null;
 
   return (
@@ -169,12 +266,28 @@ export default function App() {
               📊 Results
             </button>
           )}
+          <div style={styles.userInfo}>
+            <span style={styles.userEmail}>{currentUser.email}</span>
+            <button style={styles.signOutBtn} onClick={handleSignOut}>
+              Sign Out
+            </button>
+          </div>
         </nav>
       </header>
 
       {isHistoryPhase ? (
         <main style={styles.main}>
           <JobHistory />
+        </main>
+      ) : state.phase === "awaiting_payment" ? (
+        <main style={styles.main}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 36, marginBottom: 16 }}>⏳</div>
+            <h2 style={{ fontWeight: 700, marginBottom: 8 }}>Confirming payment…</h2>
+            <p style={{ color: "#6b7280", fontSize: 14 }}>
+              Your payment was received. Starting the pipeline in a moment.
+            </p>
+          </div>
         </main>
       ) : isBuilderPhase ? (
         <PipelineBuilder
@@ -195,15 +308,31 @@ export default function App() {
             <TierConfirm
               presign={state.presign}
               filename={state.filename}
+              pipelineId={null}
               onConfirm={handleConfirm}
               onCancel={handleReset}
             />
           )}
 
-          {state.phase === "processing" && <JobProgress job={job} />}
+          {state.phase === "processing" && (
+            <JobProgress
+              job={job}
+              onCancelled={() => { if (job) setState({ phase: "done", jobId: job.job_id }); }}
+            />
+          )}
 
           {state.phase === "done" && job && job.status === "completed" && (
             <ResultViewer job={job} onReset={handleReset} />
+          )}
+
+          {state.phase === "done" && job && job.status === "cancelled" && (
+            <div style={styles.errorCard}>
+              <h2 style={{ ...styles.errorTitle, color: "#6b7280" }}>Job Cancelled</h2>
+              <p style={styles.errorMsg}>The pipeline was cancelled before completing.</p>
+              <button style={styles.retryBtn} onClick={handleReset}>
+                Back
+              </button>
+            </div>
           )}
 
           {state.phase === "done" && job && job.status === "failed" && (
@@ -253,7 +382,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   logo: { fontSize: 28 },
   brand: { color: "#fff", fontWeight: 700, fontSize: 18, letterSpacing: "-0.3px" },
-  nav: { marginLeft: "auto", display: "flex", gap: 4 },
+  nav: { marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" },
   navBtn: {
     padding: "6px 16px",
     borderRadius: 6,
@@ -265,6 +394,24 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 500,
   },
   navBtnActive: { background: "rgba(255,255,255,0.15)" },
+  userInfo: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    marginLeft: 8,
+    paddingLeft: 12,
+    borderLeft: "1px solid rgba(255,255,255,0.2)",
+  },
+  userEmail: { color: "rgba(255,255,255,0.7)", fontSize: 12 },
+  signOutBtn: {
+    padding: "4px 10px",
+    borderRadius: 5,
+    border: "1px solid rgba(255,255,255,0.3)",
+    background: "transparent",
+    color: "rgba(255,255,255,0.8)",
+    cursor: "pointer",
+    fontSize: 12,
+  },
   main: {
     flex: 1,
     display: "flex",

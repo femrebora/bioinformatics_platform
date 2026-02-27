@@ -302,7 +302,17 @@ class MockNextflowRunner(NextflowRunner):
     """Simulates an nf-core pipeline run with a realistic delay and
     deterministic (but randomised) mock result data."""
 
-    def run(self, pipeline_id: str, storage_key: str, file_type: str) -> dict:
+    def run(
+        self,
+        pipeline_id: str,
+        storage_key: str,
+        file_type: str,
+        job_id: str = "",
+        storage_key_r2: str | None = None,
+        workflow_config: dict | None = None,
+    ) -> dict:
+        from datetime import datetime, timezone
+
         start = time.time()
 
         # Simulate pipeline execution time (longer than HLA mock)
@@ -315,6 +325,27 @@ class MockNextflowRunner(NextflowRunner):
         tier_guess = "medium"
         instance   = TIER_INSTANCE_MAP.get(tier_guess, "t3.medium")
 
+        # Extract genome / params / samples from workflow_config
+        cfg      = workflow_config or {}
+        genome   = cfg.get("genome", "")
+        params   = cfg.get("params", {})
+        samples  = cfg.get("samples", [])
+        n_samples = len(samples) if samples else 1
+
         generator = _MOCK_GENERATORS.get(pid, _mock_default)
         result    = generator(rng, instance, runtime)
+
+        # Inject provenance into every result
+        result["provenance"] = {
+            "pipeline":          f"nf-core/{pid}",
+            "pipeline_version":  "3.14.0",   # latest at time of writing; real runner reads this from .nextflow.log
+            "genome":            genome or "(not set)",
+            "params":            {k: v for k, v in params.items() if v not in (None, "", False)},
+            "n_samples":         n_samples,
+            "completed_at":      datetime.now(timezone.utc).isoformat(),
+            "instance_type":     instance,
+            "runtime_seconds":   runtime,
+        }
+
+        result["_mock"] = True
         return result

@@ -5,7 +5,7 @@ celery_app = Celery(
     "bioplatform",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
-    include=["app.tasks.pipeline", "app.tasks.scrape_nfcore"],
+    include=["app.tasks.pipeline", "app.tasks.scrape_nfcore", "app.tasks.scrape_snakemake", "app.tasks.cleanup"],
 )
 
 celery_app.conf.update(
