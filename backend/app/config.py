@@ -20,8 +20,14 @@ class Settings(BaseSettings):
     BIOSCRIPT_BACKEND: str = "mock"      # mock | awsbatch
     CUSTOM_BACKEND: str = "mock"         # mock | awsbatch
 
-    # Genome build used for gnomAD population frequency lookups
+    # Genome build used for gnomAD / VEP / CADD lookups
     ASSESSMENT_GENOME: str = "hg38"      # hg19 | hg38
+
+    # OMIM — gene-disease relationships (free academic key at omim.org/api)
+    OMIM_API_KEY: str = ""
+
+    # Orphanet — rare disease associations (free key at orphacode.org)
+    ORPHANET_API_KEY: str = ""
 
     # Local uploads directory
     UPLOADS_DIR: str = "/uploads"

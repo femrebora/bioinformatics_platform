@@ -192,14 +192,30 @@ def generate_pdf(
     # ── Variant annotation table ───────────────────────────────────────────
     story.append(Paragraph("Annotated Variants", h2_style))
 
-    headers = ["Chr", "Pos", "Ref", "Alt", "Gene", "ClinVar Significance", "Hotspot", "gnomAD AF", "AF popmax", "rsID"]
+    # ── Main variant table (variant-level fields) ──────────────────────────
+    headers = [
+        "Chr", "Pos", "Ref", "Alt", "Gene",
+        "ClinVar Sig.", "Consequence",
+        "SIFT", "PolyPhen",
+        "CADD\nPhred",
+        "gnomAD AF", "AF popmax",
+        "Hotspot", "rsID",
+    ]
     table_data = [headers]
 
     for v in variants:
         af_raw    = v.get("af")
         af_pm_raw = v.get("af_popmax")
-        af_str    = f"{af_raw:.5f}"    if isinstance(af_raw,    (int, float)) else "—"
-        af_pm_str = f"{af_pm_raw:.5f}" if isinstance(af_pm_raw, (int, float)) else "—"
+        cadd_raw  = v.get("cadd_phred")
+        sift_s    = v.get("sift_score")
+        pp_s      = v.get("polyphen_score")
+
+        def _fmt(val: Any, decimals: int = 4) -> str:
+            return f"{val:.{decimals}f}" if isinstance(val, (int, float)) else "—"
+
+        sift_str = f"{_fmt(sift_s, 3)} ({v.get('sift_pred', '')})" if sift_s is not None else v.get("sift_pred", "—") or "—"
+        pp_str   = f"{_fmt(pp_s, 3)} ({v.get('polyphen_pred', '')})" if pp_s is not None else v.get("polyphen_pred", "—") or "—"
+
         table_data.append([
             str(v.get("chrom", "")),
             str(v.get("pos", "")),
@@ -207,31 +223,43 @@ def generate_pdf(
             str(v.get("alt", "")),
             str(v.get("gene", "—")),
             str(v.get("significance", "Unknown")),
+            str(v.get("consequence", "—") or "—"),
+            sift_str,
+            pp_str,
+            _fmt(cadd_raw, 1),
+            _fmt(af_raw, 5),
+            _fmt(af_pm_raw, 5),
             "✓" if v.get("hotspot") else "—",
-            af_str,
-            af_pm_str,
             str(v.get("rsid", ".")),
         ])
 
-    col_widths = [1.3*cm, 1.8*cm, 1.0*cm, 1.0*cm, 1.7*cm, 3.8*cm, 1.3*cm, 1.7*cm, 1.7*cm, 2.2*cm]
+    col_widths = [
+        1.1*cm, 1.7*cm, 0.9*cm, 0.9*cm, 1.5*cm,
+        2.8*cm, 2.4*cm,
+        2.0*cm, 2.2*cm,
+        1.2*cm,
+        1.5*cm, 1.5*cm,
+        1.2*cm, 2.0*cm,
+    ]
     var_table = Table(table_data, colWidths=col_widths, repeatRows=1)
 
+    # sig col = 5, consequence = 6
     ts = [
         ("BACKGROUND",    (0, 0), (-1, 0), colors.HexColor("#1e3a5f")),
         ("TEXTCOLOR",     (0, 0), (-1, 0), colors.white),
         ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE",      (0, 0), (-1, -1), 7),
+        ("FONTSIZE",      (0, 0), (-1, -1), 6),
         ("FONTNAME",      (0, 1), (-1, -1), "Helvetica"),
         ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, colors.HexColor("#f9fafb")]),
         ("GRID",          (0, 0), (-1, -1), 0.3, colors.HexColor("#e5e7eb")),
         ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
-        ("ALIGN",         (4, 1), (5, -1), "LEFT"),   # Gene + ClinVar Significance left-aligned
+        ("ALIGN",         (4, 1), (6, -1), "LEFT"),
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
         ("TOPPADDING",    (0, 0), (-1, -1), 3),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("WORDWRAP",      (0, 0), (-1, -1), True),
     ]
 
-    # Highlight pathogenic rows in light red; colour significance cell (col 5)
     for row_i, v in enumerate(variants, start=1):
         sig = v.get("significance", "").lower()
         if "pathogenic" in sig:
@@ -244,14 +272,58 @@ def generate_pdf(
     story.append(var_table)
     story.append(Spacer(1, 12))
 
+    # ── Gene annotation table (protein / disease info) ──────────────────────
+    gene_rows = []
+    seen_genes: set[str] = set()
+    for v in variants:
+        gene = v.get("gene", "")
+        if not gene or gene in seen_genes:
+            continue
+        seen_genes.add(gene)
+        protein_name = v.get("protein_name", "") or ""
+        protein_func = v.get("protein_function", "") or ""
+        omim_disease = v.get("disease", "") or ""
+        omim_id      = v.get("omim_id", "") or ""
+        orpha = "; ".join(
+            d.get("name", "") for d in (v.get("orpha_diseases") or [])
+        )
+        gene_rows.append([gene, protein_name, protein_func[:120] or "—", omim_disease or "—", omim_id or "—", orpha or "—"])
+
+    if gene_rows:
+        story.append(Paragraph("Gene Annotations", h2_style))
+        gene_headers = ["Gene", "Protein", "Function (UniProt)", "Disease (OMIM)", "MIM #", "Orphanet"]
+        gene_table_data = [gene_headers] + gene_rows
+        gene_col_widths = [1.5*cm, 2.5*cm, 5.5*cm, 3.5*cm, 1.3*cm, 3.5*cm]
+        gt = Table(gene_table_data, colWidths=gene_col_widths, repeatRows=1)
+        gt.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, 0), colors.HexColor("#374151")),
+            ("TEXTCOLOR",     (0, 0), (-1, 0), colors.white),
+            ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 6),
+            ("FONTNAME",      (0, 1), (-1, -1), "Helvetica"),
+            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, colors.HexColor("#f9fafb")]),
+            ("GRID",          (0, 0), (-1, -1), 0.3, colors.HexColor("#e5e7eb")),
+            ("ALIGN",         (0, 0), (-1, -1), "LEFT"),
+            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("WORDWRAP",      (0, 0), (-1, -1), True),
+        ]))
+        story.append(gt)
+        story.append(Spacer(1, 12))
+
     # ── Databases queried ──────────────────────────────────────────────────
     story.append(Paragraph("Data Sources", h2_style))
     story.append(Paragraph(
         "<b>ClinVar (NCBI)</b> — clinical significance and pathogenicity classifications. "
-        "<b>gnomAD</b> (Genome Aggregation Database) — population allele frequencies and "
-        "popmax AF across continental populations. "
+        "<b>gnomAD v4.1</b> — population allele frequencies and popmax AF. "
+        "<b>Ensembl VEP</b> — variant consequence, SIFT and PolyPhen-2 scores, transcript annotation. "
+        "<b>CADD v1.7</b> — combined annotation-dependent depletion phred score. "
         "<b>CancerHotspots.org</b> — recurrent cancer driver mutation hotspots. "
-        "<b>dbSNP (NCBI)</b> — population variant rsID identifiers.",
+        "<b>dbSNP (NCBI)</b> — population variant rsID identifiers. "
+        "<b>UniProt</b> — protein name and function. "
+        "<b>OMIM</b> — gene-disease relationships and inheritance (if API key configured). "
+        "<b>Orphanet</b> — rare disease gene associations (if API key configured).",
         normal,
     ))
     story.append(Spacer(1, 12))
