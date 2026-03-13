@@ -38,7 +38,8 @@ services:
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
       EC2_BACKEND: ${EC2_BACKEND:-mock}
       HLA_BACKEND: ${HLA_BACKEND:-mock}
-      NEXTFLOW_BACKEND: ${NEXTFLOW_BACKEND:-mock}
+      NEXTFLOW_BACKEND: ${NEXTFLOW_BACKEND:-local}
+      NEXTFLOW_PROFILE: ${NEXTFLOW_PROFILE:-docker}
       SNAKEMAKE_BACKEND: ${SNAKEMAKE_BACKEND:-mock}
       BIOSCRIPT_BACKEND: ${BIOSCRIPT_BACKEND:-mock}
       CUSTOM_BACKEND: ${CUSTOM_BACKEND:-mock}
@@ -78,7 +79,8 @@ services:
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
       EC2_BACKEND: ${EC2_BACKEND:-mock}
       HLA_BACKEND: ${HLA_BACKEND:-mock}
-      NEXTFLOW_BACKEND: ${NEXTFLOW_BACKEND:-mock}
+      NEXTFLOW_BACKEND: ${NEXTFLOW_BACKEND:-local}
+      NEXTFLOW_PROFILE: ${NEXTFLOW_PROFILE:-docker}
       SNAKEMAKE_BACKEND: ${SNAKEMAKE_BACKEND:-mock}
       BIOSCRIPT_BACKEND: ${BIOSCRIPT_BACKEND:-mock}
       CUSTOM_BACKEND: ${CUSTOM_BACKEND:-mock}
@@ -95,7 +97,9 @@ services:
       BIOSCRIPT_DOCKER_IMAGE: ${BIOSCRIPT_DOCKER_IMAGE:-bioplatform/tools:latest}
     volumes:
       - uploads_data:/uploads
+      - outputs_data:/outputs
       - ./backend:/app
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
@@ -117,3 +121,4 @@ services:
 volumes:
   postgres_data:
   uploads_data:
+  outputs_data:

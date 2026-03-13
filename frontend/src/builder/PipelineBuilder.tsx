@@ -1,6 +1,7 @@
 import { useRef, useCallback, useEffect, useState, useMemo } from "react";
 import {
   ReactFlow,
+  ReactFlowProvider,
   addEdge,
   useNodesState,
   useEdgesState,
@@ -24,6 +25,7 @@ import { SnakemakeWorkflowNode } from "./nodes/SnakemakeWorkflowNode";
 import { BioScriptNode } from "./nodes/BioScriptNode";
 import { CustomPipelineNode } from "./nodes/CustomPipelineNode";
 import { SampleSheetNode } from "./nodes/SampleSheetNode";
+import { AssessmentNode } from "./nodes/AssessmentNode";
 import { NodePalette } from "./NodePalette";
 import { PipelineToolbar } from "./PipelineToolbar";
 import { ParameterPanel } from "./ParameterPanel";
@@ -224,6 +226,7 @@ const nodeTypes: NodeTypes = {
   bioScript: BioScriptNode,
   customPipeline: CustomPipelineNode,
   sampleSheetBuilder: SampleSheetNode,
+  assessment: AssessmentNode,
 };
 
 let nodeCounter = 0;
@@ -951,6 +954,7 @@ export function PipelineBuilder({
   }
 
   return (
+    <ReactFlowProvider>
     <div style={styles.root}>
       <div style={styles.layout}>
         <NodePalette onExpandPipeline={handleExpandPipeline} />
@@ -1047,6 +1051,7 @@ export function PipelineBuilder({
         onClose={() => setParamPanel(null)}
       />
     </div>
+    </ReactFlowProvider>
   );
 }
 

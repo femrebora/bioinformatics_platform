@@ -22,5 +22,9 @@ def get_nextflow_runner() -> NextflowRunner:
         from app.services.nextflow.batch import AWSBatchNextflowRunner
         return AWSBatchNextflowRunner()
 
+    if settings.NEXTFLOW_BACKEND == "local":
+        from app.services.nextflow.local import LocalNextflowRunner
+        return LocalNextflowRunner()
+
     from app.services.nextflow.mock import MockNextflowRunner
     return MockNextflowRunner()
