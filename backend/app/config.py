@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     SNAKEMAKE_BACKEND: str = "mock"      # mock | awsbatch
     BIOSCRIPT_BACKEND: str = "mock"      # mock | awsbatch
     CUSTOM_BACKEND: str = "mock"         # mock | awsbatch
+    ASSESSMENT_BACKEND: str = "mock"     # mock | real
 
     # Local uploads directory
     UPLOADS_DIR: str = "/uploads"

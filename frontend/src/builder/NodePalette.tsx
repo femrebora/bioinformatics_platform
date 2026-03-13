@@ -15,6 +15,17 @@ interface PaletteCard {
   headerColor: string;
 }
 
+const ANALYSIS_CARDS: PaletteCard[] = [
+  {
+    type: "assessment",
+    label: "Mutation Assessment",
+    icon: "🔬",
+    description: "ClinVar · CancerHotspots · dbSNP + PDF report",
+    borderColor: "#d97706",
+    headerColor: "#d97706",
+  },
+];
+
 const BUILTIN_CARDS: PaletteCard[] = [
   {
     type: "inputFile",
@@ -88,6 +99,25 @@ export function NodePalette({ onExpandPipeline }: NodePaletteProps) {
       {/* Built-in nodes */}
       <div style={styles.sectionTitle}>Built-in</div>
       {BUILTIN_CARDS.map((card) => (
+        <div
+          key={card.type}
+          draggable
+          onDragStart={(e) => handleBuiltinDragStart(e, card.type)}
+          style={{ ...styles.card, borderColor: card.borderColor }}
+        >
+          <div style={{ ...styles.cardHeader, background: card.headerColor }}>
+            <span style={styles.cardIcon}>{card.icon}</span>
+            <span style={styles.cardLabel}>{card.label}</span>
+          </div>
+          <div style={styles.cardDesc}>{card.description}</div>
+        </div>
+      ))}
+
+      <div style={styles.divider} />
+
+      {/* Analysis nodes */}
+      <div style={styles.sectionTitle}>Analysis</div>
+      {ANALYSIS_CARDS.map((card) => (
         <div
           key={card.type}
           draggable

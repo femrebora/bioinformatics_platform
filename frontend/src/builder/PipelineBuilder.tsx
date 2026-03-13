@@ -246,7 +246,9 @@ function derivePipelineId(nodes: Node[]): string | null {
   const hasNfc = !!nfcPipe || hasNfcModules;
   const hasBioScript = nodes.some((n) => n.type === "bioScript");
   const customNode = nodes.find((n) => n.type === "customPipeline");
+  const hasAssessment = nodes.some((n) => n.type === "assessment");
 
+  if (hasAssessment) return "assessment";
   if (hasBioScript) return "bioscript";
   if (customNode && !hasNfc && !hasSmk && !hasBioScript) {
     const tool = (customNode.data as { tool: string }).tool ?? "spades";
@@ -260,6 +262,13 @@ function derivePipelineId(nodes: Node[]): string | null {
 }
 
 function deriveWorkflowConfig(nodes: Node[]): unknown | null {
+  // Assessment: carry the source_job_id from the AssessmentNode
+  const assessmentNode = nodes.find((n) => n.type === "assessment");
+  if (assessmentNode) {
+    const d = assessmentNode.data as { sourceJobId?: string };
+    return { mode: "assessment", source_job_id: d.sourceJobId ?? null };
+  }
+
   // BioScript: collect the script from the first BioScript node
   const bioScriptNode = nodes.find((n) => n.type === "bioScript");
   if (bioScriptNode) {
@@ -473,6 +482,20 @@ export function PipelineBuilder({
     return () => window.removeEventListener("openParamPanel", handler);
   }, []);
 
+  // ── AssessmentNode data update listener ───────────────────────────────────
+  useEffect(() => {
+    function handler(e: Event) {
+      const { nodeId, sourceJobId } = (e as CustomEvent).detail as { nodeId: string; sourceJobId: string };
+      setNodes((prev) =>
+        prev.map((n) =>
+          n.id === nodeId ? { ...n, data: { ...n.data, sourceJobId } } : n
+        )
+      );
+    }
+    window.addEventListener("assessmentNodeUpdate", handler);
+    return () => window.removeEventListener("assessmentNodeUpdate", handler);
+  }, [setNodes]);
+
   // ── Template apply ───────────────────────────────────────────────────────
 
   function applyTemplate(template: PipelineTemplate) {
@@ -629,6 +652,11 @@ export function PipelineBuilder({
     if (sh === "file-out-r2" && th === "custom-in") return true;
     if (sh === "custom-out" && th === "result-in") return true;
 
+    // Assessment pipeline connections
+    if (sh === "nfc-out-results" && th === "assessment-in") return true;
+    if (sh === "result-out"      && th === "assessment-in") return true;
+    if (sh === "assessment-out"  && th === "result-in")     return true;
+
     // Strict rules for built-in-only connections
     const validPairs = [
       { source: "file-out",   target: "file-in"   }, // Input → node
@@ -673,6 +701,8 @@ export function PipelineBuilder({
         ? { label: "De Novo Assembly", tool: "spades" }
         : nodeType === "fastqToBam"
         ? { label: "FASTQ → BAM" }
+        : nodeType === "assessment"
+        ? { label: "Mutation Assessment", sourceJobId: "" }
         : { label: "Results" };
 
     const prefix =
@@ -694,6 +724,8 @@ export function PipelineBuilder({
         ? "custom"
         : nodeType === "fastqToBam"
         ? "converter"
+        : nodeType === "assessment"
+        ? "assess"
         : "results";
 
     setNodes((nds) => [
@@ -812,16 +844,18 @@ export function PipelineBuilder({
   // Compute pipeline type badge from canvas node types.
   const pipelineType = useMemo(() => {
     const types = new Set(nodes.map((n) => n.type));
-    const hasNfc    = types.has("nfcorePipeline") || types.has("nfcoreModule");
-    const hasSmk    = types.has("snakemakeWrapper") || types.has("snakemakeWorkflow");
-    const hasBs     = types.has("bioScript");
-    const hasCustom = types.has("customPipeline");
-    const count = (hasNfc ? 1 : 0) + (hasSmk ? 1 : 0) + (hasBs ? 1 : 0) + (hasCustom ? 1 : 0);
+    const hasNfc        = types.has("nfcorePipeline") || types.has("nfcoreModule");
+    const hasSmk        = types.has("snakemakeWrapper") || types.has("snakemakeWorkflow");
+    const hasBs         = types.has("bioScript");
+    const hasCustom     = types.has("customPipeline");
+    const hasAssessment = types.has("assessment");
+    const count = (hasNfc ? 1 : 0) + (hasSmk ? 1 : 0) + (hasBs ? 1 : 0) + (hasCustom ? 1 : 0) + (hasAssessment ? 1 : 0);
     if (count > 1) return "Mixed";
-    if (hasBs)     return "BioScript";
-    if (hasCustom) return "Custom";
-    if (hasSmk)    return "Snakemake";
-    if (hasNfc)    return "nf-core";
+    if (hasAssessment) return "Assessment";
+    if (hasBs)         return "BioScript";
+    if (hasCustom)     return "Custom";
+    if (hasSmk)        return "Snakemake";
+    if (hasNfc)        return "nf-core";
     return "";
   }, [nodes]);
 
@@ -841,6 +875,20 @@ export function PipelineBuilder({
     const nSamples = ssNode
       ? ((ssNode.data as { samples?: unknown[] }).samples?.length ?? 1)
       : 1;
+
+    // 0. Assessment job — no file upload needed; data comes from source_job_id
+    if (pipelineId === "assessment") {
+      const config = workflowConfig as { source_job_id?: string } | null;
+      const synth: PresignResponse = {
+        upload_url: "",
+        storage_key: config?.source_job_id ?? "assessment",
+        recommended_tier: "small",
+        estimated_cost_usd: 0.10,
+        tier_rationale: "Mutation assessment — queries ClinVar, CancerHotspots, and dbSNP.",
+      };
+      onRunRequested(synth, "assessment", "vcf", pipelineId, null, workflowConfig, 1);
+      return;
+    }
 
     // 1. Pre-uploaded via the node upload widget
     if (d?.inputMode !== "dataset" && d?.presign && d?.uploadedFilename) {

@@ -3,7 +3,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 
 from app.config import settings
 from app.schemas.upload import PresignRequest, PresignResponse
@@ -49,6 +49,16 @@ async def get_estimate(
         "estimated_hours":      est.estimated_hours,
         "pipeline_description": est.pipeline_description,
     }
+
+
+@router.get("/local/{filename}")
+async def serve_local_file(filename: str):
+    """Serve a file from the local uploads directory (e.g. assessment PDF reports)."""
+    safe_filename = os.path.basename(filename)
+    file_path = os.path.join(settings.UPLOADS_DIR, safe_filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path)
 
 
 @router.put("/local/{filename}")

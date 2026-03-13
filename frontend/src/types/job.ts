@@ -32,20 +32,22 @@ export interface Provenance {
 }
 
 export interface JobResult {
-  type?: "table" | "vcf" | "html_report" | "text" | "files";
+  type?: "table" | "vcf" | "html_report" | "text" | "files" | "assessment";
   _mock?: boolean;
   provenance?: Provenance;
   // table
   columns?: string[];
   rows?: Record<string, string | number>[];
   // vcf
-  variants?: VcfVariant[];
+  variants?: VcfVariant[] | Record<string, unknown>[];
   // html_report
   html?: string;
   // text
   content?: string;
   // files
   files?: ResultFile[];
+  // assessment
+  summary?: string;
   // always present
   instance_type: string;
   runtime_seconds: number;

@@ -78,4 +78,43 @@ const SAREK_TEMPLATE = nfcoreTemplate({
   inputFileType: "fastq",
 });
 
-export const PIPELINE_TEMPLATES: PipelineTemplate[] = [SAREK_TEMPLATE];
+const ASSESSMENT_TEMPLATE: PipelineTemplate = {
+  id: "sarek-assessment",
+  name: "Variant Calling + Assessment",
+  description: "Run nf-core/sarek for variant calling, then annotate variants via ClinVar, CancerHotspots, and dbSNP. Run sarek first, then select the completed job in the Assessment node.",
+  icon: "🔬",
+  tags: ["Variant Calling", "Assessment", "ClinVar", "Cancer"],
+  build: () => {
+    const inputId    = uid("input");
+    const pipeId     = uid("nfpipe");
+    const assessId   = uid("assess");
+    const resultsId  = uid("results");
+    return {
+      nodes: [
+        {
+          id: inputId, type: "inputFile", position: { x: 60, y: 200 },
+          data: { label: "Input File", fileType: "fastq" },
+        },
+        {
+          id: pipeId, type: "nfcorePipeline", position: { x: 340, y: 200 },
+          data: { label: "nf-core/sarek", pipelineId: "sarek", description: "Germline and somatic variant calling.", stars: 0 },
+        },
+        {
+          id: assessId, type: "assessment", position: { x: 640, y: 200 },
+          data: { label: "Mutation Assessment", sourceJobId: "" },
+        },
+        {
+          id: resultsId, type: "results", position: { x: 920, y: 200 },
+          data: { label: "Results" },
+        },
+      ],
+      edges: [
+        { id: uid("e"), source: inputId,  sourceHandle: "file-out",        target: pipeId,    targetHandle: "nfc-in-data"    },
+        { id: uid("e"), source: pipeId,   sourceHandle: "nfc-out-results",  target: assessId,  targetHandle: "assessment-in"  },
+        { id: uid("e"), source: assessId, sourceHandle: "assessment-out",   target: resultsId, targetHandle: "result-in"      },
+      ],
+    };
+  },
+};
+
+export const PIPELINE_TEMPLATES: PipelineTemplate[] = [SAREK_TEMPLATE, ASSESSMENT_TEMPLATE];

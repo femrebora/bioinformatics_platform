@@ -11,10 +11,19 @@ class AssessmentResult:
 
 class AssessmentRunner(ABC):
     @abstractmethod
-    def run(self, job_id: str, vcf_path: str) -> AssessmentResult:
-        """Cross-reference VCF variants against mutation databases."""
+    def run(
+        self,
+        job_id: str,
+        variants: list[dict],
+        workflow_config: dict | None = None,
+    ) -> AssessmentResult:
+        """Annotate VCF variants against mutation databases and generate a PDF report."""
 
 
 def get_assessment_runner() -> AssessmentRunner:
+    from app.config import settings
+    if settings.ASSESSMENT_BACKEND == "real":
+        from .real import RealAssessmentRunner
+        return RealAssessmentRunner()
     from .mock import MockAssessmentRunner
     return MockAssessmentRunner()

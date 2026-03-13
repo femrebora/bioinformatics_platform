@@ -15,6 +15,7 @@ from sqlalchemy import create_engine, text
 
 from app.celery_app import celery_app
 from app.config import settings
+from app.services.assessment.base import get_assessment_runner
 from app.services.bioscript.base import get_bioscript_runner
 from app.services.custom.base import get_custom_runner
 from app.services.ec2.base import get_ec2_backend
@@ -236,6 +237,62 @@ def run_pipeline(self, job_id: str) -> dict:
                 "runtime_seconds": int(time.time() - mixed_start),
             }
             logger.info("[pipeline] %s mixed pipeline done (%d files)", job_id, len(result["files"]))
+
+        elif pipeline_id == "assessment":
+            # ── Mutation Assessment path ──────────────────────────────────
+            _update_job(job_id, instance_id=instance_id, stage="pipeline_running")
+            append_log(job_id, "Stage: pipeline_running — running mutation assessment")
+            logger.info("[pipeline] %s → assessment_running", job_id)
+
+            wf_config = job.get("workflow_config") or {}
+            if isinstance(wf_config, str):
+                import json as _json
+                wf_config = _json.loads(wf_config)
+
+            source_job_id = wf_config.get("source_job_id") if isinstance(wf_config, dict) else None
+            if not source_job_id:
+                raise ValueError("assessment job requires workflow_config.source_job_id")
+
+            source_job = _get_job(source_job_id)
+            source_result = source_job.get("result") or {}
+            if isinstance(source_result, str):
+                import json as _json
+                source_result = _json.loads(source_result)
+            variants = source_result.get("variants", [])
+            if not variants:
+                raise ValueError(
+                    f"Source job {source_job_id} has no variants in its result. "
+                    "Run a sarek job first, then connect it to the Assessment node."
+                )
+
+            append_log(job_id, f"Loaded {len(variants)} variant(s) from source job {source_job_id}")
+            assess_start = time.time()
+
+            runner = get_assessment_runner()
+            assessment_result = runner.run(job_id, variants, wf_config)
+
+            report_path = assessment_result.report_path
+            files = []
+            if report_path:
+                import os as _os
+                files.append({
+                    "name":        "mutation_assessment_report.pdf",
+                    "path":        report_path,
+                    "size_bytes":  _os.path.getsize(report_path) if _os.path.exists(report_path) else None,
+                    "mime_type":   "application/pdf",
+                    "description": "Mutation Assessment PDF Report",
+                })
+
+            result = {
+                "type":            "assessment",
+                "summary":         assessment_result.summary,
+                "variants":        assessment_result.variants,
+                "files":           files,
+                "instance_type":   "local",
+                "runtime_seconds": int(time.time() - assess_start),
+            }
+            append_log(job_id, f"Assessment complete — {len(assessment_result.variants)} variants annotated")
+            logger.info("[pipeline] %s assessment done", job_id)
 
         elif pipeline_id == "bioscript":
             # ── BioScript (bash) path ─────────────────────────────────────

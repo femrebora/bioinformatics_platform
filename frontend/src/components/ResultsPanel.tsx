@@ -613,6 +613,127 @@ function GenericTableViewer({ columns, rows }: { columns: string[]; rows: Record
   );
 }
 
+// ── Assessment result renderer ────────────────────────────────────────────
+
+interface AnnotatedVariant {
+  chrom?: string;
+  pos?: number | string;
+  ref?: string;
+  alt?: string;
+  gene?: string;
+  significance?: string;
+  hotspot?: boolean;
+  af?: number | null;
+  rsid?: string;
+}
+
+const SIG_COLORS: Record<string, string> = {
+  "pathogenic":              "#dc2626",
+  "likely pathogenic":       "#ea580c",
+  "uncertain significance":  "#ca8a04",
+  "likely benign":           "#64748b",
+  "benign":                  "#16a34a",
+};
+
+function sigColor(sig: string): string {
+  const s = sig.toLowerCase();
+  for (const [key, col] of Object.entries(SIG_COLORS)) {
+    if (s.includes(key)) return col;
+  }
+  return "#9ca3af";
+}
+
+function AssessmentSummary({ result }: { result: JobResult }) {
+  const variants = (result.variants ?? []) as AnnotatedVariant[];
+  const pathogenic = variants.filter((v) => v.significance?.toLowerCase().includes("pathogenic")).length;
+  const hotspots   = variants.filter((v) => v.hotspot).length;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {result.summary && (
+        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#92400e" }}>
+          {result.summary}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8 }}>
+        <StatCard label="Variants assessed"       value={variants.length.toLocaleString()} color="#6b7280" />
+        <StatCard label="Pathogenic / LP"         value={pathogenic.toLocaleString()}       color="#dc2626" />
+        <StatCard label="Cancer hotspots"         value={hotspots.toLocaleString()}         color="#d97706" />
+      </div>
+    </div>
+  );
+}
+
+function AssessmentDataTab({ result }: { result: JobResult }) {
+  const variants = (result.variants ?? []) as AnnotatedVariant[];
+  const [filter, setFilter] = useState("");
+
+  const filtered = variants.filter((v) => {
+    if (!filter) return true;
+    const q = filter.toLowerCase();
+    return (
+      String(v.chrom ?? "").toLowerCase().includes(q) ||
+      String(v.gene ?? "").toLowerCase().includes(q) ||
+      String(v.significance ?? "").toLowerCase().includes(q) ||
+      String(v.rsid ?? "").toLowerCase().includes(q)
+    );
+  });
+
+  return (
+    <>
+      <input
+        placeholder="Filter by gene, significance, rsID…"
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+        style={FILTER_INPUT}
+      />
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: "#f9fafb" }}>
+              {["Chr", "Pos", "Ref", "Alt", "Gene", "ClinVar Significance", "Hotspot", "AF", "rsID"].map((h) => (
+                <th key={h} style={TH}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((v, i) => {
+              const sig = v.significance ?? "Unknown";
+              const rowBg = sig.toLowerCase().includes("likely pathogenic")
+                ? "#fff7ed"
+                : sig.toLowerCase().includes("pathogenic")
+                ? "#fff1f2"
+                : undefined;
+              return (
+                <tr key={i} style={{ borderBottom: "1px solid #f3f4f6", background: rowBg }}>
+                  <td style={TD}><code style={MONO_BLUE}>{v.chrom}</code></td>
+                  <td style={TD}>{v.pos}</td>
+                  <td style={TD}><code style={MONO_BLUE}>{v.ref}</code></td>
+                  <td style={TD}><code style={MONO_BLUE}>{v.alt}</code></td>
+                  <td style={{ ...TD, fontWeight: 600 }}>{v.gene || "—"}</td>
+                  <td style={{ ...TD, color: sigColor(sig), fontWeight: 600 }}>{sig}</td>
+                  <td style={{ ...TD, textAlign: "center" as const }}>
+                    {v.hotspot
+                      ? <span style={{ background: "#fef3c7", color: "#92400e", borderRadius: 10, padding: "1px 8px", fontSize: 10, fontWeight: 700 }}>Hotspot</span>
+                      : <span style={{ color: "#d1d5db" }}>—</span>}
+                  </td>
+                  <td style={TD}>{typeof v.af === "number" ? v.af.toFixed(4) : "—"}</td>
+                  <td style={{ ...TD, fontFamily: "monospace", fontSize: 11 }}>{v.rsid || "."}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {filtered.length === 0 && (
+        <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 12, padding: "20px 0" }}>
+          No variants match the filter.
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── Downloads tab ──────────────────────────────────────────────────────────
 
 function DownloadsTab({ result, kind }: { result: JobResult; kind: string }) {
@@ -621,7 +742,8 @@ function DownloadsTab({ result, kind }: { result: JobResult; kind: string }) {
       return [result.columns.join("\t"), ...result.rows.map((r) => result.columns!.map((c) => String(r[c] ?? "")).join("\t"))].join("\n");
     }
     if (kind === "vcf" && result.variants) {
-      return ["CHROM\tPOS\tREF\tALT\tQUAL\tFILTER", ...result.variants.map((v) => `${v.chrom}\t${v.pos}\t${v.ref}\t${v.alt}\t${v.qual ?? "."}\t${v.filter ?? "."}`)].join("\n");
+      const vcfVars = result.variants as VcfVariant[];
+      return ["CHROM\tPOS\tREF\tALT\tQUAL\tFILTER", ...vcfVars.map((v) => `${v.chrom}\t${v.pos}\t${v.ref}\t${v.alt}\t${v.qual ?? "."}\t${v.filter ?? "."}`)].join("\n");
     }
     return null;
   }
@@ -917,8 +1039,25 @@ export function ResultsPanel({ job, isOpen, onClose, onReset }: ResultsPanelProp
                 <StatCard label="Est. Cost" value={`$${job.estimated_cost_usd.toFixed(2)}`} color="#22c55e" />
               </div>
 
+              {kind === "assessment" && (
+                <>
+                  <AssessmentSummary result={result} />
+                  {result.files && result.files.length > 0 && (
+                    <div style={{ marginTop: 12, padding: "10px 14px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, display: "flex", alignItems: "center", gap: 12 }}>
+                      <span style={{ fontSize: 20 }}>📄</span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "#92400e" }}>PDF Report ready</div>
+                        <div style={{ fontSize: 11, color: "#a16207", marginTop: 1 }}>Full mutation assessment with charts and clinical annotations.</div>
+                      </div>
+                      <button onClick={() => setTab("data")} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #d97706", background: "#fff", color: "#d97706", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                        View &amp; Download →
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
               {kind === "vcf" && result.variants && (
-                <VcfSummaryView variants={result.variants} />
+                <VcfSummaryView variants={result.variants as VcfVariant[]} />
               )}
               {kind === "table" && result.rows && result.columns && isDETable(result) ? (
                 <VolcanoPlot columns={result.columns} rows={result.rows} />
@@ -977,6 +1116,44 @@ export function ResultsPanel({ job, isOpen, onClose, onReset }: ResultsPanelProp
           {/* DATA TAB */}
           {tab === "data" && (
             <>
+              {kind === "assessment"   && (
+                <>
+                  <AssessmentDataTab result={result} />
+                  {result.files && result.files.length > 0 && (
+                    <div style={{ marginTop: 16 }}>
+                      <SectionTitle>Output Files</SectionTitle>
+                      {result.files.map((f, i) => {
+                        const isPdf = f.name.toLowerCase().endsWith(".pdf");
+                        const isLocal = f.path.startsWith("/");
+                        const localUrl = isLocal
+                          ? `${window.location.origin}/api/v1/uploads/local/${encodeURIComponent(f.name)}`
+                          : null;
+                        return (
+                          <div key={i} style={{ padding: "9px 12px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 7, display: "flex", gap: 10, alignItems: "center" }}>
+                            <span style={{ fontSize: 18 }}>{isPdf ? "📄" : fileIcon(f.mime_type, f.name)}</span>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{f.name}</div>
+                              {f.description && <div style={{ fontSize: 11, color: "#6b7280" }}>{f.description}</div>}
+                            </div>
+                            {f.size_bytes != null && <div style={{ fontSize: 11, color: "#9ca3af" }}>{formatBytes(f.size_bytes)}</div>}
+                            {(f.path.startsWith("s3://") || isLocal || f.path.startsWith("http")) && (
+                              <a
+                                href={localUrl ?? f.path}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                download={isPdf ? f.name : undefined}
+                                style={{ padding: "4px 12px", borderRadius: 5, border: "1px solid #d97706", background: "#fff", color: "#d97706", cursor: "pointer", fontSize: 12, fontWeight: 600, textDecoration: "none" }}
+                              >
+                                ⬇ PDF
+                              </a>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
               {kind === "vcf"         && <VcfDataTab jobId={job.job_id} />}
               {kind === "table"       && result.columns     && result.rows && (
                 <GenericTableViewer columns={result.columns} rows={result.rows} />

@@ -65,11 +65,13 @@ export function validatePipeline(graph: GraphData): ValidationResult {
   const smkWorkflows   = graph.nodes.filter((n) => n.type === "snakemakeWorkflow");
   const bsNodes        = graph.nodes.filter((n) => n.type === "bioScript");
   const customNodes    = graph.nodes.filter((n) => n.type === "customPipeline");
+  const assessmentNodes = graph.nodes.filter((n) => n.type === "assessment");
 
-  const hasNfcoreParts = nfModuleNodes.length > 0 || nfPipeNodes.length > 0 || sampleSheetNodes.length > 0;
-  const hasSmkParts    = smkWrappers.length > 0 || smkWorkflows.length > 0;
-  const hasBsParts     = bsNodes.length > 0;
-  const hasCustomParts = customNodes.length > 0;
+  const hasNfcoreParts  = nfModuleNodes.length > 0 || nfPipeNodes.length > 0 || sampleSheetNodes.length > 0;
+  const hasSmkParts     = smkWrappers.length > 0 || smkWorkflows.length > 0;
+  const hasBsParts      = bsNodes.length > 0;
+  const hasCustomParts  = customNodes.length > 0;
+  const hasAssessmentParts = assessmentNodes.length > 0;
 
   // ── Empty canvas ────────────────────────────────────────────────────────
   if (graph.nodes.length === 0) {
@@ -77,7 +79,7 @@ export function validatePipeline(graph: GraphData): ValidationResult {
   }
 
   // ── Only generic nodes, nothing runnable yet ────────────────────────────
-  if (!hasNfcoreParts && !hasSmkParts && !hasBsParts && !hasCustomParts && resultsNodes.length === 0) {
+  if (!hasNfcoreParts && !hasSmkParts && !hasBsParts && !hasCustomParts && !hasAssessmentParts && resultsNodes.length === 0) {
     return { valid: false, errors: [] };
   }
 
@@ -146,6 +148,16 @@ export function validatePipeline(graph: GraphData): ValidationResult {
   if (hasCustomParts && !hasNfcoreParts && !hasSmkParts && !hasBsParts) {
     if (inputNodes.length === 0) {
       errors.push("Add an Input File node to provide data to the custom pipeline.");
+    }
+  }
+
+  // ── Assessment rules — needs a source sarek job to be selected ───────────
+  if (hasAssessmentParts) {
+    for (const aNode of assessmentNodes) {
+      const sourceJobId = ((aNode.data as { sourceJobId?: string }).sourceJobId ?? "").trim();
+      if (!sourceJobId) {
+        errors.push("Select a completed sarek job in the Mutation Assessment node.");
+      }
     }
   }
 

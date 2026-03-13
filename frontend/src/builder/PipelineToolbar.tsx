@@ -48,7 +48,8 @@ export function PipelineToolbar({
     "Snakemake": { bg: "#fef3c7", text: "#92400e", border: "#fde68a" },
     "BioScript": { bg: "#f3e8ff", text: "#6d28d9", border: "#e9d5ff" },
     "Custom":    { bg: "#ccfbf1", text: "#0f766e", border: "#99f6e4" },
-    "Mixed":     { bg: "#fef9c3", text: "#854d0e", border: "#fde68a" },
+    "Mixed":      { bg: "#fef9c3", text: "#854d0e", border: "#fde68a" },
+    "Assessment": { bg: "#fef3c7", text: "#92400e", border: "#fed7aa" },
   };
   const badge = pipelineType ? badgeColors[pipelineType] : null;
   return (
