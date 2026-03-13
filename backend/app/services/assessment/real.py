@@ -1,4 +1,4 @@
-"""Real assessment runner — Franklin (primary) + ClinVar / dbSNP / CancerHotspots."""
+"""Real assessment runner — ClinVar + gnomAD + CancerHotspots + dbSNP."""
 import logging
 import os
 import time
@@ -9,12 +9,20 @@ from app.services.assessment.databases import (
     query_cancer_hotspots,
     query_clinvar,
     query_dbsnp,
-    query_franklin,
+    query_gnomad,
 )
 from app.services.assessment.report import generate_pdf
 from app.services.log_streamer import append_log
 
 logger = logging.getLogger(__name__)
+
+# gnomAD dataset to use based on genome version
+_GNOMAD_DATASET = {
+    "hg38": "gnomad_r4",
+    "hg19": "gnomad_r2_1",
+    "grch38": "gnomad_r4",
+    "grch37": "gnomad_r2_1",
+}
 
 
 class RealAssessmentRunner(AssessmentRunner):
@@ -24,11 +32,13 @@ class RealAssessmentRunner(AssessmentRunner):
         variants: list[dict],
         workflow_config: dict | None = None,
     ) -> AssessmentResult:
-        use_franklin = bool(settings.FRANKLIN_API_KEY)
+        genome = (workflow_config or {}).get("genome", settings.ASSESSMENT_GENOME).lower()
+        gnomad_dataset = _GNOMAD_DATASET.get(genome, "gnomad_r4")
+
         append_log(
             job_id,
             f"Starting annotation of {len(variants)} variant(s) "
-            f"[primary source: {'Franklin by Genoox' if use_franklin else 'ClinVar (no Franklin key)'}]",
+            f"[genome: {genome}, gnomAD dataset: {gnomad_dataset}]",
         )
         annotated: list[dict] = []
 
@@ -39,41 +49,38 @@ class RealAssessmentRunner(AssessmentRunner):
             ref   = v.get("ref", "")
             alt   = v.get("alt", "")
 
-            # 1. Franklin by Genoox — primary source (ACMG classification, gene, gnomAD AF)
-            if use_franklin:
-                append_log(job_id, f"  [{i+1}/{len(variants)}] Franklin: {chrom}:{pos} {ref}>{alt}")
-                fr = query_franklin(chrom, pos, ref, alt)
-                ann["significance"] = fr.get("classification") or "Unknown"
-                ann["gene"]         = fr.get("gene") or v.get("gene", "")
-                ann["hgvs"]         = fr.get("hgvs", "")
-                ann["condition"]    = fr.get("condition", "")
-                ann["acmg_criteria"] = fr.get("acmg_criteria", [])
-                if fr.get("gnomad_af") is not None:
-                    ann["af"] = fr["gnomad_af"]
+            # 1. ClinVar — clinical significance + gene + HGVS
+            append_log(job_id, f"  [{i+1}/{len(variants)}] ClinVar {chrom}:{pos} {ref}>{alt}")
+            cv = query_clinvar(chrom, pos, ref, alt)
+            ann["significance"] = cv.get("significance", "Unknown")
+            ann["gene"]         = cv.get("gene", v.get("gene", ""))
+            ann["hgvs"]         = cv.get("hgvs", "")
+            ann["rsid"]         = cv.get("rsid", v.get("id", "."))
+            time.sleep(0.35)  # NCBI rate limit: 3 req/s
 
-            # 2. ClinVar — fallback classification when Franklin key absent, or supplement
-            if not use_franklin or ann["significance"] == "Unknown":
-                append_log(job_id, f"  [{i+1}/{len(variants)}] ClinVar: {chrom}:{pos}")
-                cv = query_clinvar(chrom, pos, ref, alt)
-                if not use_franklin:
-                    ann["significance"] = cv.get("significance", "Unknown")
-                    ann["gene"]         = cv.get("gene", v.get("gene", ""))
-                    ann["rsid"]         = cv.get("rsid", v.get("id", "."))
-                elif cv.get("significance") and cv["significance"] != "Unknown":
-                    # Franklin returned Unknown — use ClinVar as fallback
-                    ann["significance"] = cv["significance"]
-                    if not ann["gene"]:
-                        ann["gene"] = cv.get("gene", "")
-                time.sleep(0.35)  # NCBI rate limit
+            # 2. gnomAD — population allele frequency + gene fallback + HGVS supplement
+            append_log(job_id, f"  [{i+1}/{len(variants)}] gnomAD {chrom}:{pos}")
+            gn = query_gnomad(chrom, pos, ref, alt, dataset=gnomad_dataset)
+            if gn.get("af") is not None:
+                ann["af"] = gn["af"]
+            if gn.get("af_popmax") is not None:
+                ann["af_popmax"] = gn["af_popmax"]
+            if not ann["gene"] and gn.get("gene"):
+                ann["gene"] = gn["gene"]
+            # gnomAD rsids take priority if ClinVar didn't find one
+            if ann["rsid"] in (".", "", None) and gn.get("rsids"):
+                ann["rsid"] = gn["rsids"][0]
+            if not ann["hgvs"]:
+                ann["hgvs"] = gn.get("hgvsc") or gn.get("hgvsp") or ""
 
-            # 3. dbSNP — rsID if not already set
-            if ann.get("rsid", ".") in (".", "", None):
+            # 3. dbSNP — rsID last resort
+            if ann["rsid"] in (".", "", None):
                 snp = query_dbsnp(chrom, pos)
                 ann["rsid"] = snp.get("rsid", ".")
                 time.sleep(0.35)
 
-            # 4. CancerHotspots — cancer driver overlay (gene-level)
-            if ann.get("gene"):
+            # 4. CancerHotspots — cancer driver overlay
+            if ann["gene"]:
                 hs = query_cancer_hotspots(ann["gene"])
                 ann["hotspot"]      = hs.get("is_hotspot", False)
                 ann["hotspot_type"] = hs.get("hotspot_type")
@@ -81,7 +88,7 @@ class RealAssessmentRunner(AssessmentRunner):
             else:
                 ann["hotspot"] = False
 
-            # 5. Population AF from VCF INFO field if not set by Franklin
+            # 5. AF from VCF INFO field if gnomAD returned nothing
             ann.setdefault("af", _parse_af(str(v.get("info", ""))))
 
             annotated.append(ann)
@@ -97,7 +104,7 @@ class RealAssessmentRunner(AssessmentRunner):
             append_log(job_id, f"WARNING: PDF generation failed — {exc}")
             report_path = None
 
-        pathogenic = sum(1 for a in annotated if "pathogenic" in a.get("significance", "").lower())
+        pathogenic    = sum(1 for a in annotated if "pathogenic" in a.get("significance", "").lower())
         hotspot_count = sum(1 for a in annotated if a.get("hotspot"))
 
         summary = (

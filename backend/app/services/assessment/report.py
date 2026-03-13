@@ -192,12 +192,14 @@ def generate_pdf(
     # ── Variant annotation table ───────────────────────────────────────────
     story.append(Paragraph("Annotated Variants", h2_style))
 
-    headers = ["Chr", "Pos", "Ref", "Alt", "Gene", "Classification", "Hotspot", "AF", "rsID"]
+    headers = ["Chr", "Pos", "Ref", "Alt", "Gene", "ClinVar Significance", "Hotspot", "gnomAD AF", "AF popmax", "rsID"]
     table_data = [headers]
 
     for v in variants:
-        af_raw = v.get("af")
-        af_str = f"{af_raw:.4f}" if isinstance(af_raw, (int, float)) else "—"
+        af_raw    = v.get("af")
+        af_pm_raw = v.get("af_popmax")
+        af_str    = f"{af_raw:.5f}"    if isinstance(af_raw,    (int, float)) else "—"
+        af_pm_str = f"{af_pm_raw:.5f}" if isinstance(af_pm_raw, (int, float)) else "—"
         table_data.append([
             str(v.get("chrom", "")),
             str(v.get("pos", "")),
@@ -207,10 +209,11 @@ def generate_pdf(
             str(v.get("significance", "Unknown")),
             "✓" if v.get("hotspot") else "—",
             af_str,
+            af_pm_str,
             str(v.get("rsid", ".")),
         ])
 
-    col_widths = [1.5*cm, 2.0*cm, 1.2*cm, 1.2*cm, 1.8*cm, 4.2*cm, 1.4*cm, 1.5*cm, 2.5*cm]
+    col_widths = [1.3*cm, 1.8*cm, 1.0*cm, 1.0*cm, 1.7*cm, 3.8*cm, 1.3*cm, 1.7*cm, 1.7*cm, 2.2*cm]
     var_table = Table(table_data, colWidths=col_widths, repeatRows=1)
 
     ts = [
@@ -222,19 +225,18 @@ def generate_pdf(
         ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, colors.HexColor("#f9fafb")]),
         ("GRID",          (0, 0), (-1, -1), 0.3, colors.HexColor("#e5e7eb")),
         ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
-        ("ALIGN",         (4, 1), (5, -1), "LEFT"),   # Gene + Significance left-aligned
+        ("ALIGN",         (4, 1), (5, -1), "LEFT"),   # Gene + ClinVar Significance left-aligned
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
         ("TOPPADDING",    (0, 0), (-1, -1), 3),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]
 
-    # Highlight pathogenic rows in light red
+    # Highlight pathogenic rows in light red; colour significance cell (col 5)
     for row_i, v in enumerate(variants, start=1):
         sig = v.get("significance", "").lower()
         if "pathogenic" in sig:
             bg = colors.HexColor("#fff1f2") if "likely" in sig else colors.HexColor("#fee2e2")
             ts.append(("BACKGROUND", (0, row_i), (-1, row_i), bg))
-        # Color the significance cell
         ts.append(("TEXTCOLOR", (5, row_i), (5, row_i), _sig_color(v.get("significance", ""))))
         ts.append(("FONTNAME",  (5, row_i), (5, row_i), "Helvetica-Bold"))
 
@@ -245,9 +247,9 @@ def generate_pdf(
     # ── Databases queried ──────────────────────────────────────────────────
     story.append(Paragraph("Data Sources", h2_style))
     story.append(Paragraph(
-        "<b>Franklin by Genoox</b> (franklin.genoox.com) — primary ACMG variant classification, "
-        "gene annotation, gnomAD population allele frequencies, and disease associations. "
-        "<b>ClinVar (NCBI)</b> — clinical significance and pathogenicity classifications (fallback/supplement). "
+        "<b>ClinVar (NCBI)</b> — clinical significance and pathogenicity classifications. "
+        "<b>gnomAD</b> (Genome Aggregation Database) — population allele frequencies and "
+        "popmax AF across continental populations. "
         "<b>CancerHotspots.org</b> — recurrent cancer driver mutation hotspots. "
         "<b>dbSNP (NCBI)</b> — population variant rsID identifiers.",
         normal,

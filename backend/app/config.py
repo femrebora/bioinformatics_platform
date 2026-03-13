@@ -20,10 +20,8 @@ class Settings(BaseSettings):
     BIOSCRIPT_BACKEND: str = "mock"      # mock | awsbatch
     CUSTOM_BACKEND: str = "mock"         # mock | awsbatch
 
-    # Franklin by Genoox — primary variant classification source
-    # Register free at https://franklin.genoox.com to obtain an API key
-    FRANKLIN_API_KEY: str = ""
-    FRANKLIN_GENOME: str = "hg38"        # hg19 | hg38
+    # Genome build used for gnomAD population frequency lookups
+    ASSESSMENT_GENOME: str = "hg38"      # hg19 | hg38
 
     # Local uploads directory
     UPLOADS_DIR: str = "/uploads"
