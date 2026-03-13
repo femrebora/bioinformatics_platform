@@ -39,18 +39,17 @@ A full-stack, visual bioinformatics pipeline execution platform. Drag-and-drop a
 ### Prerequisites
 
 - Docker Desktop (or Docker Engine + Docker Compose plugin)
-- 4 GB RAM available for Docker
+- 8 GB RAM available for Docker (4 GB minimum)
 
-### Start
+### Start (demo / debug mode — no AWS, no Stripe needed)
 
 ```bash
 git clone <your-repo-url>
 cd bioinformatics_platform
-cp .env.example .env
 docker compose up
 ```
 
-Wait for both of these lines:
+Wait for:
 
 ```
 backend-1  | INFO:     Application startup complete.
@@ -63,7 +62,52 @@ frontend-1 | ➜  Local:   http://localhost:5173/
 | API | http://localhost:8000 |
 | Swagger docs | http://localhost:8000/docs |
 
-Register an account on first visit. All runners default to **mock mode** — no AWS credentials needed for local development.
+Register an account on first visit. Everything works out of the box:
+
+- **Storage** → files saved to a local Docker volume (`/uploads`)
+- **sarek / nf-core** → mock runner returns realistic fake results in ~10 s
+- **Snakemake / BioScript / Custom** → mock runners, no tools installed
+- **Assessment pipeline** → fully real (queries ClinVar, gnomAD, CADD, etc. live over the internet)
+- **Payments** → Stripe is optional; you can create jobs directly via the API without a Stripe key
+
+### Running modes
+
+There are three modes for the sarek/Nextflow runner, controlled by `NEXTFLOW_BACKEND`:
+
+| Mode | `NEXTFLOW_BACKEND` | What happens | When to use |
+|------|-------------------|-------------|-------------|
+| **Mock** (default) | `mock` | Returns realistic fake VCF/MultiQC data in ~10 s | Demos, UI development, debugging |
+| **Local** | `local` | Runs real `nf-core/sarek` via Docker on your machine | Testing the real pipeline locally |
+| **AWS Batch** | `awsbatch` | Submits to AWS Batch | Production |
+
+To switch modes without editing files, set the variable before `docker compose up`:
+
+```bash
+# Demo mode (default — no setup needed)
+docker compose up
+
+# Real local sarek (needs ~100 GB GATK reference files — see below)
+NEXTFLOW_BACKEND=local docker compose up
+```
+
+### Running real sarek locally
+
+`NEXTFLOW_BACKEND=local` runs the actual nf-core/sarek pipeline on your laptop/server via Docker. Requirements:
+
+1. **Docker** with at least 16 GB RAM allocated and 200 GB free disk.
+2. **GATK reference bundle** — download GRCh38 resources (~100 GB):
+   ```bash
+   # The pipeline will auto-download on first run via nf-core's iGenomes config.
+   # Or pre-download to a local path and override --genome with a custom genomes.conf.
+   ```
+3. Set in `.env`:
+   ```
+   NEXTFLOW_BACKEND=local
+   NEXTFLOW_PROFILE=docker   # or singularity
+   ```
+4. The first run pulls all the nf-core/sarek Docker images (~20 GB). Subsequent runs are fast.
+
+> **Tip:** For MVP demos, always use mock mode. It's instant and shows the full UI/results flow without any data files.
 
 ### Stop
 
@@ -75,16 +119,34 @@ docker compose down -v       # full reset (wipes all data)
 ### Useful commands
 
 ```bash
-# View logs
-docker compose logs -f backend
+# View all logs
+docker compose logs -f
+
+# View only worker (where pipeline jobs run)
 docker compose logs -f worker
 
 # TypeScript type-check (runs inside container)
 docker compose exec frontend sh -c "cd /app && npx tsc --noEmit"
 
-# Open a backend shell
+# Open a backend Python shell
 docker compose exec backend bash
+
+# Run backend tests
+docker compose exec backend pytest tests/ -v
+
+# Restart just the worker (after code changes)
+docker compose restart worker
 ```
+
+### Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| Port 5432 already in use | Stop local Postgres, or change `5432:5432` to `5433:5432` in docker-compose.yml |
+| Port 6380 already in use | Change `6380:6379` to another port |
+| Assessment job fails with network errors | The assessment runner calls live public APIs — check your internet connection |
+| `nextflow: not found` in worker logs | Only relevant when `NEXTFLOW_BACKEND=local`; Nextflow is pre-installed in `Dockerfile.worker` |
+| Jobs stuck in `pending` | Worker container crashed — run `docker compose logs worker` to see why |
 
 ---
 

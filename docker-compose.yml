@@ -38,12 +38,13 @@ services:
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
       EC2_BACKEND: ${EC2_BACKEND:-mock}
       HLA_BACKEND: ${HLA_BACKEND:-mock}
-      NEXTFLOW_BACKEND: ${NEXTFLOW_BACKEND:-local}
+      NEXTFLOW_BACKEND: ${NEXTFLOW_BACKEND:-mock}
       NEXTFLOW_PROFILE: ${NEXTFLOW_PROFILE:-docker}
       SNAKEMAKE_BACKEND: ${SNAKEMAKE_BACKEND:-mock}
       BIOSCRIPT_BACKEND: ${BIOSCRIPT_BACKEND:-mock}
       CUSTOM_BACKEND: ${CUSTOM_BACKEND:-mock}
       UPLOADS_DIR: /uploads
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
       JWT_SECRET: ${JWT_SECRET:-changeme-replace-in-production-with-a-random-secret}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
@@ -56,6 +57,9 @@ services:
       SNAKEMAKE_BATCH_QUEUE: ${SNAKEMAKE_BATCH_QUEUE:-}
       SNAKEMAKE_CONTAINER_IMAGE: ${SNAKEMAKE_CONTAINER_IMAGE:-snakemake/snakemake:v8.20.0}
       BIOSCRIPT_DOCKER_IMAGE: ${BIOSCRIPT_DOCKER_IMAGE:-bioplatform/tools:latest}
+      ASSESSMENT_GENOME: ${ASSESSMENT_GENOME:-hg38}
+      OMIM_API_KEY: ${OMIM_API_KEY:-}
+      ORPHANET_API_KEY: ${ORPHANET_API_KEY:-}
     volumes:
       - uploads_data:/uploads
       - ./backend:/app
@@ -79,7 +83,7 @@ services:
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
       EC2_BACKEND: ${EC2_BACKEND:-mock}
       HLA_BACKEND: ${HLA_BACKEND:-mock}
-      NEXTFLOW_BACKEND: ${NEXTFLOW_BACKEND:-local}
+      NEXTFLOW_BACKEND: ${NEXTFLOW_BACKEND:-mock}
       NEXTFLOW_PROFILE: ${NEXTFLOW_PROFILE:-docker}
       SNAKEMAKE_BACKEND: ${SNAKEMAKE_BACKEND:-mock}
       BIOSCRIPT_BACKEND: ${BIOSCRIPT_BACKEND:-mock}
@@ -95,6 +99,9 @@ services:
       SNAKEMAKE_BATCH_QUEUE: ${SNAKEMAKE_BATCH_QUEUE:-}
       SNAKEMAKE_CONTAINER_IMAGE: ${SNAKEMAKE_CONTAINER_IMAGE:-snakemake/snakemake:v8.20.0}
       BIOSCRIPT_DOCKER_IMAGE: ${BIOSCRIPT_DOCKER_IMAGE:-bioplatform/tools:latest}
+      ASSESSMENT_GENOME: ${ASSESSMENT_GENOME:-hg38}
+      OMIM_API_KEY: ${OMIM_API_KEY:-}
+      ORPHANET_API_KEY: ${ORPHANET_API_KEY:-}
     volumes:
       - uploads_data:/uploads
       - outputs_data:/outputs
