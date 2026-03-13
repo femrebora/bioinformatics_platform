@@ -21,9 +21,5 @@ class AssessmentRunner(ABC):
 
 
 def get_assessment_runner() -> AssessmentRunner:
-    from app.config import settings
-    if settings.ASSESSMENT_BACKEND == "real":
-        from .real import RealAssessmentRunner
-        return RealAssessmentRunner()
-    from .mock import MockAssessmentRunner
-    return MockAssessmentRunner()
+    from .real import RealAssessmentRunner
+    return RealAssessmentRunner()

@@ -192,7 +192,7 @@ def generate_pdf(
     # ── Variant annotation table ───────────────────────────────────────────
     story.append(Paragraph("Annotated Variants", h2_style))
 
-    headers = ["Chr", "Pos", "Ref", "Alt", "Gene", "ClinVar Significance", "Hotspot", "AF", "rsID"]
+    headers = ["Chr", "Pos", "Ref", "Alt", "Gene", "Classification", "Hotspot", "AF", "rsID"]
     table_data = [headers]
 
     for v in variants:
@@ -245,9 +245,11 @@ def generate_pdf(
     # ── Databases queried ──────────────────────────────────────────────────
     story.append(Paragraph("Data Sources", h2_style))
     story.append(Paragraph(
-        "ClinVar (NCBI) — clinical significance and pathogenicity classifications. "
-        "CancerHotspots.org — recurrent cancer driver mutations. "
-        "dbSNP (NCBI) — population variant identifiers.",
+        "<b>Franklin by Genoox</b> (franklin.genoox.com) — primary ACMG variant classification, "
+        "gene annotation, gnomAD population allele frequencies, and disease associations. "
+        "<b>ClinVar (NCBI)</b> — clinical significance and pathogenicity classifications (fallback/supplement). "
+        "<b>CancerHotspots.org</b> — recurrent cancer driver mutation hotspots. "
+        "<b>dbSNP (NCBI)</b> — population variant rsID identifiers.",
         normal,
     ))
     story.append(Spacer(1, 12))

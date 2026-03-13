@@ -1,7 +1,13 @@
 """
-Synchronous wrappers for public mutation databases.
+Synchronous wrappers for mutation databases.
 
-All functions are tolerant of network failures and return empty dicts on error.
+Priority:
+  1. Franklin by Genoox (primary) — ACMG classification, gnomAD AF, HGVS
+  2. ClinVar (NCBI)               — fallback / supplement
+  3. dbSNP (NCBI)                 — rsID fallback
+  4. CancerHotspots.org           — cancer driver hotspot overlay
+
+All functions tolerate network failures and return empty dicts on error.
 NCBI rate limit without API key: 3 req/s — callers must pace requests.
 """
 import logging
@@ -15,9 +21,91 @@ logger = logging.getLogger(__name__)
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": "bioplatform-assessment/1.0 (research use)"})
 
+FRANKLIN_BASE = "https://franklin.genoox.com/api/v1"
 NCBI_BASE     = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 HOTSPOTS_BASE = "https://www.cancerhotspots.org/api"
 NCBI_TIMEOUT  = 10  # seconds
+FRANKLIN_TIMEOUT = 15  # seconds
+
+
+def query_franklin(chrom: str, pos: int | str, ref: str, alt: str) -> dict[str, Any]:
+    """
+    Primary annotation source — Franklin by Genoox.
+
+    Returns {classification, gene, acmg_criteria, gnomad_af, condition, hgvs}
+    on success, or {} if the API key is absent / the call fails.
+
+    Requires FRANKLIN_API_KEY in settings.
+    API: POST https://franklin.genoox.com/api/v1/variant/analyze
+    Docs: https://franklin.genoox.com/clinical-db/home
+    """
+    from app.config import settings
+    if not settings.FRANKLIN_API_KEY:
+        return {}
+
+    try:
+        chrom_clean = str(chrom).lstrip("chrCHR") or chrom
+        # Franklin expects chromosome without 'chr' prefix for numeric chromosomes
+        payload: dict[str, Any] = {
+            "chromosome":    str(chrom),
+            "position":      int(pos),
+            "ref_allele":    ref,
+            "alt_allele":    alt,
+            "genome_version": settings.FRANKLIN_GENOME,
+        }
+        headers = {
+            "Authorization": f"Bearer {settings.FRANKLIN_API_KEY}",
+            "Content-Type":  "application/json",
+        }
+        r = _SESSION.post(
+            f"{FRANKLIN_BASE}/variant/analyze",
+            json=payload,
+            headers=headers,
+            timeout=FRANKLIN_TIMEOUT,
+        )
+        r.raise_for_status()
+        data = r.json()
+
+        # Normalise the response — field names may vary across API versions
+        classification = (
+            data.get("classification")
+            or data.get("acmg_classification")
+            or data.get("pathogenicity")
+            or ""
+        )
+        gene = (
+            data.get("gene_symbol")
+            or data.get("gene")
+            or (data.get("gene_data") or {}).get("symbol", "")
+        )
+        gnomad_af = (
+            data.get("gnomad_af")
+            or data.get("gnomAD_AF")
+            or (data.get("population_data") or {}).get("gnomad_af")
+        )
+        hgvs = (
+            data.get("hgvs")
+            or data.get("hgvs_c")
+            or data.get("protein_change")
+            or ""
+        )
+        condition = data.get("condition") or data.get("disease") or ""
+        acmg_criteria = data.get("acmg_criteria") or data.get("criteria") or []
+
+        return {
+            "classification":  classification,
+            "gene":            gene,
+            "acmg_criteria":   acmg_criteria,
+            "gnomad_af":       gnomad_af,
+            "condition":       condition,
+            "hgvs":            hgvs,
+        }
+
+    except Exception as exc:
+        logger.debug(
+            "Franklin query failed for %s:%s %s>%s: %s", chrom, pos, ref, alt, exc
+        )
+        return {}
 
 
 def query_clinvar(chrom: str, pos: int | str, ref: str, alt: str) -> dict[str, Any]:
