@@ -1,16 +1,26 @@
 """
 Synchronous wrappers for public mutation databases.
 
-Sources queried per variant:
+Variant-level sources:
   1.  ClinVar (NCBI)        — pathogenicity classification + gene + HGVS
   2.  gnomAD                — population allele frequency (ACMG BA1/BS1/PM2)
   3.  Ensembl VEP           — SIFT, PolyPhen-2, consequence terms, transcript
   4.  CADD                  — phred-scaled pathogenicity score
-  5.  CancerHotspots.org    — recurrent cancer driver mutations
-  6.  dbSNP (NCBI)          — rsID fallback
-  7.  UniProt               — protein function description (gene-level)
-  8.  OMIM                  — gene-disease relationships (requires API key)
-  9.  Orphanet              — rare disease associations (requires API key)
+  5.  MyVariant.info        — REVEL, MetaLR, MetaSVM, MutationTaster, GERP++, PhyloP
+  6.  SpliceAI (Broad)      — splice site disruption delta scores
+  7.  InterVar (WinterVar)  — ACMG/AMP criteria + auto-classification
+  8.  CancerHotspots.org    — recurrent cancer driver mutations
+  9.  dbSNP (NCBI)          — rsID fallback
+
+Gene-level sources (cached per gene):
+  10. UniProt               — protein name + function
+  11. HGNC                  — authoritative gene symbol, locus group, Ensembl/Entrez IDs
+  12. ClinGen               — gene-disease validity (Definitive/Strong/Moderate)
+  13. GenCC                 — aggregated gene-disease validity (ClinGen+OMIM+Orphanet+PanelApp)
+  14. HPO / Ensembl         — phenotype terms associated with gene
+  15. LOVD                  — locus-specific variant count
+  16. OMIM                  — gene-disease + inheritance (optional: OMIM_API_KEY)
+  17. Orphanet              — rare disease associations (optional: ORPHANET_API_KEY)
 
 All functions tolerate network failures and return empty dicts/defaults on error.
 NCBI rate limit without key: 3 req/s — callers must pace requests.
@@ -35,6 +45,14 @@ UNIPROT_BASE  = "https://rest.uniprot.org/uniprotkb"
 OMIM_BASE     = "https://api.omim.org/api"
 ORPHANET_BASE = "https://api.orphacode.org/EN"
 
+MYVARIANT_BASE     = "https://myvariant.info/v1"
+SPLICEAI_BASE      = "https://spliceailookup-api.broadinstitute.org"
+INTERVAR_BASE      = "http://wintervar.wglab.org"
+CLINGEN_EREPO_BASE = "https://erepo.clinicalgenome.org/evrepo/api/v1"
+LOVD_BASE          = "https://api.lovd.nl/v1.0"
+HGNC_BASE          = "https://rest.genenames.org"
+GENCC_BASE         = "https://thegencc.org/api/v1"
+
 NCBI_TIMEOUT    = 10
 GNOMAD_TIMEOUT  = 15
 VEP_TIMEOUT     = 20
@@ -42,6 +60,15 @@ CADD_TIMEOUT    = 15
 UNIPROT_TIMEOUT = 10
 OMIM_TIMEOUT    = 10
 ORPHANET_TIMEOUT = 10
+
+MYVARIANT_TIMEOUT         = 15
+SPLICEAI_TIMEOUT          = 15
+INTERVAR_TIMEOUT          = 20
+CLINGEN_TIMEOUT           = 12
+LOVD_TIMEOUT              = 12
+HGNC_TIMEOUT              = 10
+GENCC_TIMEOUT             = 12
+ENSEMBL_PHENOTYPE_TIMEOUT = 12
 
 # gnomAD dataset → CADD genome string
 _CADD_GENOME = {
@@ -463,4 +490,350 @@ def query_orphanet(gene: str) -> dict[str, Any]:
 
     except Exception as exc:
         logger.debug("Orphanet query failed for gene %s: %s", gene, exc)
+        return {}
+
+
+# ── MyVariant.info ─────────────────────────────────────────────────────────────
+
+def query_myvariant(chrom: str, pos: int | str, ref: str, alt: str) -> dict[str, Any]:
+    """
+    Return {revel, metalr, metasvm, mutation_taster_pred, mutation_taster_score,
+            gerp_rs, phylop} from MyVariant.info (free, no key).
+    Aggregates dbNSFP scores including REVEL, MetaLR, MetaSVM, MutationTaster, GERP++, PhyloP.
+    """
+    try:
+        chrom_clean = str(chrom).replace("chr", "").replace("Chr", "")
+        # HGVS ID for SNVs: chrN:g.POSREF>ALT
+        hgvs_id = f"chr{chrom_clean}:g.{pos}{ref}>{alt}"
+        fields = "dbnsfp.revel,dbnsfp.metalr,dbnsfp.metasvm,dbnsfp.mutationtaster,cadd.gerp,cadd.phylop"
+        r = _SESSION.get(
+            f"{MYVARIANT_BASE}/variant/{hgvs_id}",
+            params={"fields": fields},
+            timeout=MYVARIANT_TIMEOUT,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if "error" in data:
+            return {}
+
+        dbnsfp = data.get("dbnsfp") or {}
+        cadd   = data.get("cadd") or {}
+
+        def _first(val: Any) -> Any:
+            """Take first element if list."""
+            return val[0] if isinstance(val, list) else val
+
+        revel = _first(
+            (dbnsfp.get("revel") or {}).get("score")
+            if isinstance(dbnsfp.get("revel"), dict)
+            else dbnsfp.get("revel")
+        )
+
+        metalr = _first(
+            (dbnsfp.get("metalr") or {}).get("score")
+            if isinstance(dbnsfp.get("metalr"), dict)
+            else dbnsfp.get("metalr")
+        )
+
+        metasvm = _first(
+            (dbnsfp.get("metasvm") or {}).get("score")
+            if isinstance(dbnsfp.get("metasvm"), dict)
+            else dbnsfp.get("metasvm")
+        )
+
+        mt = dbnsfp.get("mutationtaster") or {}
+        mt_pred  = _first(mt.get("pred"))  if isinstance(mt, dict) else ""
+        mt_score = _first(mt.get("score")) if isinstance(mt, dict) else None
+
+        gerp_rs  = (cadd.get("gerp") or {}).get("rs") if isinstance(cadd.get("gerp"), dict) else cadd.get("gerp")
+        phylop   = cadd.get("phylop")
+
+        return {
+            "revel":                 revel,
+            "metalr":                metalr,
+            "metasvm":               metasvm,
+            "mutation_taster_pred":  mt_pred  or "",
+            "mutation_taster_score": mt_score,
+            "gerp_rs":               gerp_rs,
+            "phylop":                phylop,
+        }
+    except Exception as exc:
+        logger.debug("MyVariant query failed for %s:%s %s>%s: %s", chrom, pos, ref, alt, exc)
+        return {}
+
+
+# ── SpliceAI ───────────────────────────────────────────────────────────────────
+
+def query_spliceai(chrom: str, pos: int | str, ref: str, alt: str, hg: str = "38") -> dict[str, Any]:
+    """
+    Return {spliceai_ds_max, spliceai_ds_ag, spliceai_ds_al, spliceai_ds_dg, spliceai_ds_dl}
+    from the Broad Institute SpliceAI lookup (free, no key).
+    spliceai_ds_max >= 0.2 is considered a meaningful splice effect.
+    """
+    try:
+        chrom_clean = str(chrom).replace("chr", "").replace("Chr", "")
+        variant = f"chr{chrom_clean}-{pos}-{ref}-{alt}"
+        r = _SESSION.get(
+            f"{SPLICEAI_BASE}/spliceai/",
+            params={"hg": hg, "variant": variant},
+            timeout=SPLICEAI_TIMEOUT,
+        )
+        r.raise_for_status()
+        data = r.json()
+        scores = data.get("scores") or {}
+        if not scores:
+            return {}
+
+        ds_ag = scores.get("ds_ag") or scores.get("DS_AG", 0.0)
+        ds_al = scores.get("ds_al") or scores.get("DS_AL", 0.0)
+        ds_dg = scores.get("ds_dg") or scores.get("DS_DG", 0.0)
+        ds_dl = scores.get("ds_dl") or scores.get("DS_DL", 0.0)
+
+        return {
+            "spliceai_ds_max": max(ds_ag, ds_al, ds_dg, ds_dl),
+            "spliceai_ds_ag":  ds_ag,
+            "spliceai_ds_al":  ds_al,
+            "spliceai_ds_dg":  ds_dg,
+            "spliceai_ds_dl":  ds_dl,
+        }
+    except Exception as exc:
+        logger.debug("SpliceAI query failed for %s:%s %s>%s: %s", chrom, pos, ref, alt, exc)
+        return {}
+
+
+# ── InterVar ───────────────────────────────────────────────────────────────────
+
+def query_intervar(chrom: str, pos: int | str, ref: str, alt: str, build: str = "hg38") -> dict[str, Any]:
+    """
+    Return {intervar_class, acmg_criteria} from WinterVar (InterVar web API, free).
+    Applies ACMG/AMP 2015 guidelines automatically.
+    acmg_criteria: list of met criteria e.g. ['PM2', 'PP3']
+    """
+    try:
+        chrom_clean = str(chrom).replace("chr", "").replace("Chr", "")
+        r = _SESSION.get(
+            f"{INTERVAR_BASE}/api2.php",
+            params={
+                "queryType": "position",
+                "chr":       chrom_clean,
+                "pos":       str(pos),
+                "ref":       ref,
+                "alt":       alt,
+                "build":     build,
+            },
+            timeout=INTERVAR_TIMEOUT,
+        )
+        r.raise_for_status()
+        data = r.json()
+
+        intervar_class = data.get("intervar") or data.get("Intervar") or ""
+
+        # Collect met ACMG criteria (value == 1 means met)
+        criteria_keys = [
+            "PVS1",
+            "PS1", "PS2", "PS3", "PS4",
+            "PM1", "PM2", "PM3", "PM4", "PM5", "PM6",
+            "PP1", "PP2", "PP3", "PP4", "PP5",
+            "BA1",
+            "BS1", "BS2", "BS3", "BS4",
+            "BP1", "BP2", "BP3", "BP4", "BP5", "BP6", "BP7",
+        ]
+        met = [k for k in criteria_keys if data.get(k) == 1 or data.get(k.lower()) == 1]
+
+        return {
+            "intervar_class": intervar_class,
+            "acmg_criteria":  met,
+        }
+    except Exception as exc:
+        logger.debug("InterVar query failed for %s:%s %s>%s: %s", chrom, pos, ref, alt, exc)
+        return {}
+
+
+# ── ClinGen ────────────────────────────────────────────────────────────────────
+
+def query_clingen(gene: str) -> dict[str, Any]:
+    """
+    Return {clingen_classifications: [{disease, moi, classification, url}]}
+    from ClinGen Evidence Repository (free, no key).
+    Classification strength: Definitive > Strong > Moderate > Limited > No Known Disease.
+    """
+    if not gene:
+        return {}
+    try:
+        r = _SESSION.get(
+            f"{CLINGEN_EREPO_BASE}/classifications",
+            params={"gene_symbol": gene, "limit": 10},
+            headers={"Accept": "application/json"},
+            timeout=CLINGEN_TIMEOUT,
+        )
+        r.raise_for_status()
+        data = r.json()
+        items = data if isinstance(data, list) else data.get("data", []) or data.get("results", [])
+
+        results = []
+        for item in items[:5]:
+            disease = (
+                (item.get("disease") or {}).get("label", "")
+                if isinstance(item.get("disease"), dict)
+                else str(item.get("disease", ""))
+            )
+            moi = (
+                (item.get("modeOfInheritance") or {}).get("label", "")
+                if isinstance(item.get("modeOfInheritance"), dict)
+                else str(item.get("modeOfInheritance", ""))
+            )
+            classification = (
+                (item.get("classification") or {}).get("label", "")
+                if isinstance(item.get("classification"), dict)
+                else str(item.get("classification", ""))
+            )
+            if disease or classification:
+                results.append({"disease": disease, "moi": moi, "classification": classification})
+
+        return {"clingen_classifications": results} if results else {}
+    except Exception as exc:
+        logger.debug("ClinGen query failed for gene %s: %s", gene, exc)
+        return {}
+
+
+# ── LOVD ───────────────────────────────────────────────────────────────────────
+
+def query_lovd(gene: str) -> dict[str, Any]:
+    """
+    Return {lovd_variant_count, lovd_pathogenic_count} from LOVD (free, no key).
+    LOVD (Leiden Open Variation Database) hosts locus-specific variant databases.
+    """
+    if not gene:
+        return {}
+    try:
+        r = _SESSION.get(
+            f"{LOVD_BASE}/variants/{gene}",
+            params={"format": "application/json", "limit": "0"},
+            headers={"Accept": "application/json"},
+            timeout=LOVD_TIMEOUT,
+        )
+        r.raise_for_status()
+        data = r.json()
+
+        total = data.get("total") or data.get("n_total") or 0
+        # Try to count pathogenic from entries if available
+        entries = data.get("data") or data.get("variants") or []
+        pathogenic = sum(
+            1 for e in entries
+            if isinstance(e, dict) and "pathogenic" in str(e.get("classification", "") or e.get("effect", "")).lower()
+        )
+
+        return {
+            "lovd_variant_count":    int(total),
+            "lovd_pathogenic_count": pathogenic,
+        }
+    except Exception as exc:
+        logger.debug("LOVD query failed for gene %s: %s", gene, exc)
+        return {}
+
+
+# ── HGNC ───────────────────────────────────────────────────────────────────────
+
+def query_hgnc(gene: str) -> dict[str, Any]:
+    """
+    Return {hgnc_id, locus_group, locus_type, entrez_id, ensembl_id, gene_family}
+    from HGNC (HUGO Gene Nomenclature Committee, free, no key).
+    """
+    if not gene:
+        return {}
+    try:
+        r = _SESSION.get(
+            f"{HGNC_BASE}/fetch/symbol/{gene}",
+            headers={"Accept": "application/json"},
+            timeout=HGNC_TIMEOUT,
+        )
+        r.raise_for_status()
+        docs = r.json().get("response", {}).get("docs", [])
+        if not docs:
+            return {}
+        doc = docs[0]
+        families = doc.get("gene_family") or []
+        return {
+            "hgnc_id":     doc.get("hgnc_id", ""),
+            "locus_group": doc.get("locus_group", ""),
+            "locus_type":  doc.get("locus_type", ""),
+            "entrez_id":   doc.get("entrez_id", ""),
+            "ensembl_id":  doc.get("ensembl_gene_id", ""),
+            "gene_family": families[0] if families else "",
+        }
+    except Exception as exc:
+        logger.debug("HGNC query failed for gene %s: %s", gene, exc)
+        return {}
+
+
+# ── GenCC ──────────────────────────────────────────────────────────────────────
+
+def query_gencc(gene: str) -> dict[str, Any]:
+    """
+    Return {gencc_diseases: [{disease, classification, submitter}]}
+    from GenCC (aggregates ClinGen, OMIM, Orphanet, PanelApp — free, no key).
+    """
+    if not gene:
+        return {}
+    try:
+        r = _SESSION.get(
+            f"{GENCC_BASE}/classifications-search",
+            params={"gene_symbol": gene},
+            headers={"Accept": "application/json"},
+            timeout=GENCC_TIMEOUT,
+        )
+        r.raise_for_status()
+        data = r.json()
+        items = data.get("data", []) or data.get("classifications", []) or (data if isinstance(data, list) else [])
+
+        results = []
+        for item in items[:8]:
+            disease        = (item.get("disease") or {}).get("title", "") if isinstance(item.get("disease"), dict) else str(item.get("disease_title", "") or item.get("disease", ""))
+            classification = (item.get("classification") or {}).get("title", "") if isinstance(item.get("classification"), dict) else str(item.get("classification_title", "") or item.get("classification", ""))
+            submitter      = (item.get("submitter") or {}).get("title", "") if isinstance(item.get("submitter"), dict) else str(item.get("submitter_title", "") or item.get("submitter", ""))
+            if disease or classification:
+                results.append({"disease": disease, "classification": classification, "submitter": submitter})
+
+        return {"gencc_diseases": results} if results else {}
+    except Exception as exc:
+        logger.debug("GenCC query failed for gene %s: %s", gene, exc)
+        return {}
+
+
+# ── HPO / Ensembl phenotype ────────────────────────────────────────────────────
+
+def query_hpo(gene: str) -> dict[str, Any]:
+    """
+    Return {hpo_terms: [{term, description, source}]} via Ensembl phenotype/gene endpoint.
+    Includes HPO, OMIM, and Orphanet phenotype terms associated with the gene.
+    """
+    if not gene:
+        return {}
+    try:
+        r = _SESSION.get(
+            f"{VEP_BASE}/phenotype/gene/homo_sapiens/{gene}",
+            params={"include_associated": "1"},
+            headers={"Accept": "application/json"},
+            timeout=ENSEMBL_PHENOTYPE_TIMEOUT,
+        )
+        r.raise_for_status()
+        entries = r.json()
+        if not isinstance(entries, list):
+            return {}
+
+        # Collect HPO / phenotype terms (deduplicated)
+        seen: set[str] = set()
+        terms = []
+        for e in entries:
+            desc = e.get("description") or e.get("trait") or ""
+            source = e.get("source") or ""
+            if desc and desc not in seen:
+                seen.add(desc)
+                terms.append({"term": desc, "source": source})
+            if len(terms) >= 10:
+                break
+
+        return {"hpo_terms": terms} if terms else {}
+    except Exception as exc:
+        logger.debug("HPO/Ensembl phenotype query failed for gene %s: %s", gene, exc)
         return {}
