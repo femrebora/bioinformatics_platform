@@ -49,7 +49,8 @@ def _sig_color(sig: str) -> colors.Color:
     return colors.HexColor("#9ca3af")
 
 
-def _sig_counts(variants: list[dict[str, Any]]) -> dict[str, int]:
+def _sig_counts(variants: list[dict[str, Any]]) -> tuple[dict[str, int], int]:
+    """Return (classification_buckets, hotspot_count) in a single pass."""
     buckets = {
         "Pathogenic": 0,
         "Likely pathogenic": 0,
@@ -58,6 +59,7 @@ def _sig_counts(variants: list[dict[str, Any]]) -> dict[str, int]:
         "Benign": 0,
         "Unknown": 0,
     }
+    hotspots = 0
     for v in variants:
         sig = v.get("significance", "").lower()
         if "likely pathogenic" in sig:
@@ -72,7 +74,9 @@ def _sig_counts(variants: list[dict[str, Any]]) -> dict[str, int]:
             buckets["VUS"] += 1
         else:
             buckets["Unknown"] += 1
-    return buckets
+        if v.get("hotspot"):
+            hotspots += 1
+    return buckets, hotspots
 
 
 def _make_bar_chart(counts: dict[str, int]) -> Drawing:
@@ -99,14 +103,7 @@ def _make_bar_chart(counts: dict[str, int]) -> Drawing:
     chart.categoryAxis.labels.angle = 15
     chart.categoryAxis.labels.dy = -6
 
-    bar_colors = [
-        colors.HexColor("#dc2626"),
-        colors.HexColor("#ea580c"),
-        colors.HexColor("#ca8a04"),
-        colors.HexColor("#64748b"),
-        colors.HexColor("#16a34a"),
-        colors.HexColor("#9ca3af"),
-    ]
+    bar_colors = list(_SIG_COLORS.values()) + [colors.HexColor("#9ca3af")]
     for i, col in enumerate(bar_colors):
         chart.bars[0, i].fillColor = col
 
@@ -138,6 +135,18 @@ _BASE_TABLE_STYLE = [
 
 def _fmt(val: Any, decimals: int = 4) -> str:
     return f"{val:.{decimals}f}" if isinstance(val, (int, float)) else "—"
+
+
+def _fmt_score_pred(score: Any, pred: str, decimals: int = 3) -> str:
+    """Format a (score, prediction) pair for table cells."""
+    if score is not None:
+        return f"{_fmt(score, decimals)}\n({pred})" if pred else _fmt(score, decimals)
+    return pred or "—"
+
+
+def _table_style(*extras: tuple) -> TableStyle:
+    """Build a TableStyle from _BASE_TABLE_STYLE plus caller-supplied overrides."""
+    return TableStyle(list(_BASE_TABLE_STYLE) + list(extras))
 
 
 def generate_pdf(
@@ -192,10 +201,9 @@ def generate_pdf(
     story.append(HRFlowable(width="100%", thickness=1, color=_GRID_COLOR, spaceAfter=8))
 
     # ── Summary stats ──────────────────────────────────────────────────────
-    counts     = _sig_counts(variants)
+    counts, hotspots = _sig_counts(variants)
     total      = len(variants)
     pathogenic = counts["Pathogenic"] + counts["Likely pathogenic"]
-    hotspots   = sum(1 for v in variants if v.get("hotspot"))
 
     summary_data = [
         ["Total Variants", "Pathogenic / LP", "Cancer Hotspots"],
@@ -275,8 +283,7 @@ def generate_pdf(
     ]
     ta_table = Table(ta_data, colWidths=ta_col_w, repeatRows=1)
 
-    ta_ts = list(_BASE_TABLE_STYLE)
-    ta_ts += [
+    ta_extra: list[tuple] = [
         ("BACKGROUND", (0, 0), (-1, 0), _HEADER_BG),
         ("ALIGN",      (4, 1), (6, -1), "LEFT"),
     ]
@@ -284,11 +291,11 @@ def generate_pdf(
         sig = v.get("significance", "").lower()
         if "pathogenic" in sig:
             bg = colors.HexColor("#fff1f2") if "likely" in sig else colors.HexColor("#fee2e2")
-            ta_ts.append(("BACKGROUND", (0, row_i), (-1, row_i), bg))
-        ta_ts.append(("TEXTCOLOR", (5, row_i), (5, row_i), _sig_color(v.get("significance", ""))))
-        ta_ts.append(("FONTNAME",  (5, row_i), (5, row_i), "Helvetica-Bold"))
+            ta_extra.append(("BACKGROUND", (0, row_i), (-1, row_i), bg))
+        ta_extra.append(("TEXTCOLOR", (5, row_i), (5, row_i), _sig_color(v.get("significance", ""))))
+        ta_extra.append(("FONTNAME",  (5, row_i), (5, row_i), "Helvetica-Bold"))
 
-    ta_table.setStyle(TableStyle(ta_ts))
+    ta_table.setStyle(_table_style(*ta_extra))
     story.append(ta_table)
     story.append(Spacer(1, 12))
 
@@ -313,21 +320,11 @@ def generate_pdf(
     tb_data = [tb_headers]
 
     for v in variants:
-        sift_s = v.get("sift_score")
-        pp_s   = v.get("polyphen_score")
-        sift_str = (
-            f"{_fmt(sift_s, 3)}\n({v.get('sift_pred', '')})"
-            if sift_s is not None
-            else v.get("sift_pred", "—") or "—"
-        )
-        pp_str = (
-            f"{_fmt(pp_s, 3)}\n({v.get('polyphen_pred', '')})"
-            if pp_s is not None
-            else v.get("polyphen_pred", "—") or "—"
-        )
+        sift_str = _fmt_score_pred(v.get("sift_score"),     v.get("sift_pred", "") or "")
+        pp_str   = _fmt_score_pred(v.get("polyphen_score"), v.get("polyphen_pred", "") or "")
         mt_pred  = v.get("mutation_taster_pred", "") or ""
         mt_score = v.get("mutation_taster_score")
-        mt_str = f"{mt_pred} ({_fmt(mt_score, 3)})" if mt_score is not None else mt_pred or "—"
+        mt_str   = _fmt_score_pred(mt_score, mt_pred)
 
         tb_data.append([
             str(v.get("gene", "—")),
@@ -361,12 +358,10 @@ def generate_pdf(
     ]
     tb_table = Table(tb_data, colWidths=tb_col_w, repeatRows=1)
 
-    tb_ts = list(_BASE_TABLE_STYLE)
-    tb_ts += [
+    tb_table.setStyle(_table_style(
         ("BACKGROUND", (0, 0), (-1, 0), _HEADER_BG),
         ("ALIGN",      (0, 1), (1, -1), "LEFT"),
-    ]
-    tb_table.setStyle(TableStyle(tb_ts))
+    ))
     story.append(tb_table)
     story.append(Spacer(1, 12))
 
@@ -444,13 +439,11 @@ def generate_pdf(
         ]
         tc_table = Table(tc_data, colWidths=tc_col_w, repeatRows=1)
 
-        tc_ts = list(_BASE_TABLE_STYLE)
-        tc_ts += [
+        tc_table.setStyle(_table_style(
             ("BACKGROUND", (0, 0), (-1, 0), _HEADER_BG2),
             ("ALIGN",      (0, 0), (-1, -1), "LEFT"),
             ("VALIGN",     (0, 0), (-1, -1), "TOP"),
-        ]
-        tc_table.setStyle(TableStyle(tc_ts))
+        ))
         story.append(tc_table)
         story.append(Spacer(1, 12))
 
