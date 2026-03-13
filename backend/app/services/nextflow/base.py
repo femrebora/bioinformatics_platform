@@ -18,7 +18,7 @@ class NextflowRunner(ABC):
 def get_nextflow_runner() -> NextflowRunner:
     from app.config import settings
 
-    if settings.NEXTFLOW_BACKEND == "awsbatch":
+    if settings.NEXTFLOW_BACKEND in ("aws", "awsbatch"):
         from app.services.nextflow.batch import AWSBatchNextflowRunner
         return AWSBatchNextflowRunner()
 

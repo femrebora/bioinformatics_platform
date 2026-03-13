@@ -24,7 +24,7 @@ def get_snakemake_runner() -> SnakemakeRunner:
         from app.services.snakemake.mock import MockSnakemakeRunner
         return MockSnakemakeRunner()
 
-    if settings.SNAKEMAKE_BACKEND == "awsbatch":
+    if settings.SNAKEMAKE_BACKEND in ("aws", "awsbatch"):
         from app.services.snakemake.batch import AWSBatchSnakemakeRunner
         return AWSBatchSnakemakeRunner()
 

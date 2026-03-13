@@ -63,7 +63,7 @@ def get_custom_runner() -> CustomPipelineRunner:
     from app.config import settings
 
     backend = getattr(settings, "CUSTOM_BACKEND", "mock")
-    if backend == "awsbatch":
+    if backend in ("aws", "awsbatch"):
         from app.services.custom.batch import AWSBatchCustomRunner
         return AWSBatchCustomRunner()
 

@@ -14,11 +14,11 @@ class Settings(BaseSettings):
     # Backend injection via env vars
     STORAGE_BACKEND: str = "local"       # local | s3
     EC2_BACKEND: str = "mock"            # mock | aws
-    NEXTFLOW_BACKEND: str = "mock"       # mock | local | awsbatch
+    NEXTFLOW_BACKEND: str = "mock"       # mock | local | aws
     NEXTFLOW_PROFILE: str = "docker"     # docker | singularity (local mode only)
-    SNAKEMAKE_BACKEND: str = "mock"      # mock | awsbatch
-    BIOSCRIPT_BACKEND: str = "mock"      # mock | awsbatch
-    CUSTOM_BACKEND: str = "mock"         # mock | awsbatch
+    SNAKEMAKE_BACKEND: str = "mock"      # mock | aws
+    BIOSCRIPT_BACKEND: str = "mock"      # mock | aws
+    CUSTOM_BACKEND: str = "mock"         # mock | aws
 
     # Genome build used for gnomAD / VEP / CADD lookups
     ASSESSMENT_GENOME: str = "hg38"      # hg19 | hg38

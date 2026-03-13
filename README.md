@@ -78,7 +78,7 @@ There are three modes for the sarek/Nextflow runner, controlled by `NEXTFLOW_BAC
 |------|-------------------|-------------|-------------|
 | **Mock** (default) | `mock` | Returns realistic fake VCF/MultiQC data in ~10 s | Demos, UI development, debugging |
 | **Local** | `local` | Runs real `nf-core/sarek` via Docker on your machine | Testing the real pipeline locally |
-| **AWS Batch** | `awsbatch` | Submits to AWS Batch | Production |
+| **AWS** | `aws` | Submits to AWS Batch | Production |
 
 To switch modes without editing files, set the variable before `docker compose up`:
 
@@ -215,10 +215,10 @@ bioinformatics_platform/
 
 | `pipeline_id` | Runner | Backend env var | Notes |
 |---------------|--------|----------------|-------|
-| `"sarek"` | Nextflow | `NEXTFLOW_BACKEND=mock\|local\|awsbatch` | nf-core variant calling; auto-generates samplesheet |
-| other nf-core | Nextflow | `NEXTFLOW_BACKEND=mock\|local\|awsbatch` | rnaseq, atacseq, etc. |
-| `"snakemake"` | Snakemake | `SNAKEMAKE_BACKEND=mock\|awsbatch` | Generates Snakefile from canvas wrappers |
-| `"bioscript"` | BioScript | `BIOSCRIPT_BACKEND=mock\|awsbatch` | Runs user's bash script in tools Docker image |
+| `"sarek"` | Nextflow | `NEXTFLOW_BACKEND=mock\|local\|aws` | nf-core variant calling; auto-generates samplesheet |
+| other nf-core | Nextflow | `NEXTFLOW_BACKEND=mock\|local\|aws` | rnaseq, atacseq, etc. |
+| `"snakemake"` | Snakemake | `SNAKEMAKE_BACKEND=mock\|aws` | Generates Snakefile from canvas wrappers |
+| `"bioscript"` | BioScript | `BIOSCRIPT_BACKEND=mock\|aws` | Runs user's bash script in tools Docker image |
 | `"assessment"` | Assessment | always real | Annotates sarek VCF against 17 databases; generates PDF |
 
 ---
