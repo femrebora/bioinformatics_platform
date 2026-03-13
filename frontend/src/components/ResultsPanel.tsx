@@ -10,7 +10,7 @@
  */
 import { useState, useEffect } from "react";
 import { getDownloadUrl, getVcfPage } from "../api/client";
-import type { Job, JobResult, HLAAllele, VcfVariant, Provenance } from "../types/job";
+import type { Job, JobResult, VcfVariant, Provenance } from "../types/job";
 
 // ── File type helpers ──────────────────────────────────────────────────────
 
@@ -192,7 +192,6 @@ function VolcanoPlot({ columns, rows }: { columns: string[]; rows: Record<string
 
 function detectType(result: JobResult): string {
   if (result.type) return result.type;
-  if (result.hla_alleles?.length) return "hla_alleles";
   if (result.variants?.length) return "vcf";
   if (result.columns && result.rows) return "table";
   if (result.html) return "html_report";
@@ -212,31 +211,6 @@ function dlJson(data: unknown, filename: string) {
 }
 function dlText(text: string, filename: string, mime = "text/plain") {
   dlBlob(new Blob([text], { type: mime }), filename);
-}
-
-// ── Locus colour palette (MHC genes) ─────────────────────────────────────
-
-type LocusStyle = { bg: string; text: string; accent: string };
-const LOCUS: Record<string, LocusStyle> = {
-  A:    { bg: "#dbeafe", text: "#1d4ed8", accent: "#3b82f6" },
-  B:    { bg: "#dcfce7", text: "#15803d", accent: "#22c55e" },
-  C:    { bg: "#fef3c7", text: "#92400e", accent: "#f59e0b" },
-  DRB1: { bg: "#fee2e2", text: "#b91c1c", accent: "#ef4444" },
-  DRB3: { bg: "#fee2e2", text: "#b91c1c", accent: "#ef4444" },
-  DRB4: { bg: "#fee2e2", text: "#b91c1c", accent: "#ef4444" },
-  DRB5: { bg: "#fee2e2", text: "#b91c1c", accent: "#ef4444" },
-  DQA1: { bg: "#ede9fe", text: "#6d28d9", accent: "#8b5cf6" },
-  DQB1: { bg: "#fce7f3", text: "#9d174d", accent: "#ec4899" },
-  DPA1: { bg: "#ccfbf1", text: "#0f766e", accent: "#14b8a6" },
-  DPB1: { bg: "#cffafe", text: "#0e7490", accent: "#06b6d4" },
-};
-function locusStyle(gene: string): LocusStyle {
-  const locus = gene.replace(/^HLA-/, "");
-  return LOCUS[locus] ?? { bg: "#f3f4f6", text: "#374151", accent: "#6b7280" };
-}
-function locusShort(gene: string): string {
-  const l = gene.replace(/^HLA-/, "");
-  return l.length > 4 ? l.slice(0, 4) : l;
 }
 
 // ── Horizontal bar chart ───────────────────────────────────────────────────
@@ -422,83 +396,6 @@ function ProvenanceCard({ provenance }: { provenance: Provenance }) {
         </div>
       )}
     </div>
-  );
-}
-
-// ── HLA viewers ────────────────────────────────────────────────────────────
-
-function AlleleCard({ gene, allele_1, allele_2 }: HLAAllele) {
-  const ls = locusStyle(gene);
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: "#fafafa", border: "1px solid #f0f0f0", borderRadius: 8, marginBottom: 5 }}>
-      <div style={{ width: 34, height: 34, borderRadius: 7, background: ls.bg, display: "flex", alignItems: "center", justifyContent: "center", color: ls.text, fontWeight: 700, fontSize: 10, flexShrink: 0, border: `1px solid ${ls.accent}30` }}>
-        {locusShort(gene)}
-      </div>
-      <div style={{ minWidth: 68, fontSize: 11, color: "#374151", fontWeight: 600 }}>{gene}</div>
-      <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-        <code style={{ background: ls.bg, color: ls.text, borderRadius: 5, padding: "3px 9px", fontSize: 11, fontFamily: "monospace", fontWeight: 500 }}>{allele_1}</code>
-        <code style={{ background: ls.bg, color: ls.text, borderRadius: 5, padding: "3px 9px", fontSize: 11, fontFamily: "monospace", fontWeight: 500 }}>{allele_2}</code>
-      </div>
-    </div>
-  );
-}
-
-function HLASummaryView({ alleles }: { alleles: HLAAllele[] }) {
-  const classI  = alleles.filter((a) => /^HLA-[ABC]$/.test(a.gene));
-  const classII = alleles.filter((a) => !classI.includes(a));
-  const barData: BarEntry[] = alleles.map((a) => ({
-    label: a.gene.replace("HLA-", ""),
-    value: 2,
-    color: locusStyle(a.gene).accent,
-  }));
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      {classI.length > 0 && (
-        <section>
-          <SectionTitle>MHC Class I — {classI.map((a) => a.gene).join(", ")}</SectionTitle>
-          {classI.map((a) => <AlleleCard key={a.gene} {...a} />)}
-        </section>
-      )}
-      {classII.length > 0 && (
-        <section>
-          <SectionTitle>MHC Class II — {classII.map((a) => a.gene).join(", ")}</SectionTitle>
-          {classII.map((a) => <AlleleCard key={a.gene} {...a} />)}
-        </section>
-      )}
-      {alleles.length > 0 && (
-        <section>
-          <SectionTitle>Loci Genotyped</SectionTitle>
-          <HBarChart data={barData} />
-        </section>
-      )}
-    </div>
-  );
-}
-
-function HLADataTab({ alleles }: { alleles: HLAAllele[] }) {
-  return (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-      <thead>
-        <tr style={{ background: "#f9fafb" }}>
-          {["Gene", "Allele 1", "Allele 2"].map((h) => (
-            <th key={h} style={TH}>{h}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {alleles.map((a) => {
-          const ls = locusStyle(a.gene);
-          return (
-            <tr key={a.gene} style={{ borderBottom: "1px solid #f3f4f6" }}>
-              <td style={TD}><strong>{a.gene}</strong></td>
-              <td style={TD}><code style={{ background: ls.bg, color: ls.text, borderRadius: 4, padding: "2px 8px", fontSize: 12, fontFamily: "monospace" }}>{a.allele_1}</code></td>
-              <td style={TD}><code style={{ background: ls.bg, color: ls.text, borderRadius: 4, padding: "2px 8px", fontSize: 12, fontFamily: "monospace" }}>{a.allele_2}</code></td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
   );
 }
 
@@ -719,18 +616,7 @@ function GenericTableViewer({ columns, rows }: { columns: string[]; rows: Record
 // ── Downloads tab ──────────────────────────────────────────────────────────
 
 function DownloadsTab({ result, kind }: { result: JobResult; kind: string }) {
-  const [copied, setCopied] = useState(false);
-
-  function handleCopy() {
-    if (!result.hla_alleles) return;
-    const text = result.hla_alleles.map((a) => `${a.gene}: ${a.allele_1} / ${a.allele_2}`).join("\n");
-    navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
-  }
-
   function makeTsv(): string | null {
-    if (kind === "hla_alleles" && result.hla_alleles) {
-      return ["Gene\tAllele 1\tAllele 2", ...result.hla_alleles.map((a) => `${a.gene}\t${a.allele_1}\t${a.allele_2}`)].join("\n");
-    }
     if (kind === "table" && result.columns && result.rows) {
       return [result.columns.join("\t"), ...result.rows.map((r) => result.columns!.map((c) => String(r[c] ?? "")).join("\t"))].join("\n");
     }
@@ -752,10 +638,6 @@ function DownloadsTab({ result, kind }: { result: JobResult; kind: string }) {
 
       {tsv && (
         <DlButton icon="📊" label="Download TSV" sub="Tab-separated, compatible with Excel" onClick={() => dlText(tsv, kind === "vcf" ? "variants.tsv" : "results.tsv", "text/tab-separated-values")} />
-      )}
-
-      {kind === "hla_alleles" && (
-        <DlButton icon={copied ? "✅" : "📋"} label={copied ? "Copied!" : "Copy Alleles to Clipboard"} sub="Gene: Allele1 / Allele2 format" onClick={handleCopy} />
       )}
 
       {kind === "html_report" && result.html && (
@@ -1035,9 +917,6 @@ export function ResultsPanel({ job, isOpen, onClose, onReset }: ResultsPanelProp
                 <StatCard label="Est. Cost" value={`$${job.estimated_cost_usd.toFixed(2)}`} color="#22c55e" />
               </div>
 
-              {kind === "hla_alleles" && result.hla_alleles && (
-                <HLASummaryView alleles={result.hla_alleles} />
-              )}
               {kind === "vcf" && result.variants && (
                 <VcfSummaryView variants={result.variants} />
               )}
@@ -1098,7 +977,6 @@ export function ResultsPanel({ job, isOpen, onClose, onReset }: ResultsPanelProp
           {/* DATA TAB */}
           {tab === "data" && (
             <>
-              {kind === "hla_alleles" && result.hla_alleles && <HLADataTab alleles={result.hla_alleles} />}
               {kind === "vcf"         && <VcfDataTab jobId={job.job_id} />}
               {kind === "table"       && result.columns     && result.rows && (
                 <GenericTableViewer columns={result.columns} rows={result.rows} />

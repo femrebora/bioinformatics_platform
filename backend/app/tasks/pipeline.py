@@ -18,7 +18,6 @@ from app.config import settings
 from app.services.bioscript.base import get_bioscript_runner
 from app.services.custom.base import get_custom_runner
 from app.services.ec2.base import get_ec2_backend
-from app.services.hla.base import get_hla_runner
 from app.services.nextflow.base import get_nextflow_runner
 from app.services.snakemake.base import get_snakemake_runner
 from app.services.storage.base import get_storage_backend
@@ -83,11 +82,7 @@ def _get_job(job_id: str) -> dict:
     soft_time_limit=13800,  # 3 h 50 m — gives ~10 min for DB write + email
 )
 def run_pipeline(self, job_id: str) -> dict:
-    """Route to the correct runner based on whether the job has a pipeline_id.
-
-    * No pipeline_id  →  HLA runner (backward-compatible)
-    * pipeline_id set →  Nextflow / nf-core runner
-    """
+    """Route to the correct runner based on the job's pipeline_id."""
     logger.info("[pipeline] Starting job %s", job_id)
 
     try:
@@ -112,7 +107,7 @@ def run_pipeline(self, job_id: str) -> dict:
             raise _last_db_exc  # type: ignore[misc]
 
         pipeline_id: str | None = job.get("pipeline_id")
-        append_log(job_id, f"Job {job_id} started — pipeline: {pipeline_id or 'HLA'}")
+        append_log(job_id, f"Job {job_id} started — pipeline: {pipeline_id or 'unknown'}")
         append_log(job_id, f"File type: {job.get('file_type', 'unknown')}  tier: {job.get('tier', 'unknown')}")
 
         # Stage 1: start EC2 (skipped when using real cloud runners — they manage
@@ -294,18 +289,7 @@ def run_pipeline(self, job_id: str) -> dict:
             logger.info("[pipeline] %s pipeline done (%s)", job_id, pipeline_id)
 
         else:
-            # ── HLA path (legacy) ─────────────────────────────────────────
-            storage = get_storage_backend()
-            file_path = storage.file_path(job["storage_key"])
-
-            _update_job(job_id, instance_id=instance_id, stage="hla_running")
-            append_log(job_id, "Stage: hla_running — running HLA-HD typing")
-            logger.info("[pipeline] %s → hla_running", job_id)
-
-            hla = get_hla_runner()
-            result = hla.run(file_path, job["file_type"])
-            append_log(job_id, "HLA-HD typing completed")
-            logger.info("[pipeline] %s HLA done: %s", job_id, result)
+            raise ValueError(f"Unknown pipeline_id: {pipeline_id!r}")
 
         # Stage 3: done
         from psycopg2.extras import Json
@@ -331,7 +315,7 @@ def run_pipeline(self, job_id: str) -> dict:
                     to=user_email,
                     job_id=job_id,
                     status="completed",
-                    pipeline=pipeline_id or "HLA typing",
+                    pipeline=pipeline_id or "unknown",
                     job_name=job.get("job_name", ""),
                     runtime=f"{runtime_s}s",
                 )
@@ -368,7 +352,7 @@ def run_pipeline(self, job_id: str) -> dict:
                     to=user_email,
                     job_id=job_id,
                     status="failed",
-                    pipeline=fresh_job.get("pipeline_id") or "HLA typing",
+                    pipeline=fresh_job.get("pipeline_id") or "unknown",
                     job_name=fresh_job.get("job_name", ""),
                     error=str(exc),
                 )
@@ -378,10 +362,3 @@ def run_pipeline(self, job_id: str) -> dict:
         raise
 
 
-# ── Legacy alias (kept for backward compatibility) ───────────────────────
-
-
-@celery_app.task(bind=True, name="app.tasks.pipeline.run_hla_pipeline")
-def run_hla_pipeline(self, job_id: str) -> dict:
-    """Backward-compatible alias — delegates to run_pipeline."""
-    return run_pipeline(job_id)

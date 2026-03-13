@@ -39,10 +39,6 @@ function deriveOutputHints(nodeId: string, edges: Edge[], nodes: Node[]): Output
     const src = nodes.find((n) => n.id === edge.source);
     if (!src) continue;
 
-    if (src.type === "hlaTyping") {
-      addHint({ icon: "🧬", label: "HLA Alleles" });
-      continue;
-    }
     if (src.type === "nfcorePipeline") {
       addHint({ icon: "📦", label: "Pipeline Output" });
       continue;

@@ -91,7 +91,7 @@ async def create_checkout(
 
     # Stripe requires minimum 50 cents
     amount_cents = max(50, round(body.estimated_cost_usd * 100))
-    pipeline_label = body.pipeline_id or "HLA typing"
+    pipeline_label = body.pipeline_id or "unknown pipeline"
 
     # Store workflow_config in Redis (avoids Stripe's 500-char metadata limit)
     workflow_config_ref = ""

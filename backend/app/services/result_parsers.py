@@ -5,7 +5,6 @@ compatible dict understood by the frontend ``ResultsPanel``.
 
 Supported result types (matching frontend ``JobResult.type``):
 
-* ``"hla_alleles"``  — HLA typing (HLA-HD)
 * ``"table"``        — generic tabular data (gene counts, taxonomy, etc.)
 * ``"vcf"``          — variant call format
 * ``"html_report"``  — HTML content (e.g. MultiQC)

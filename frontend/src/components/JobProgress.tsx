@@ -10,7 +10,6 @@ interface Props {
 const STAGE_PROGRESS: Record<string, number> = {
   pending: 5,
   ec2_starting: 25,
-  hla_running: 65,
   pipeline_running: 50,
   snakemake_running: 75,
   done: 100,
@@ -19,7 +18,6 @@ const STAGE_PROGRESS: Record<string, number> = {
 const STAGE_LABELS: Record<string, string> = {
   pending: "Queued — waiting for worker…",
   ec2_starting: "Starting compute instance…",
-  hla_running: "Running HLA-HD…",
   pipeline_running: "Running Nextflow pipeline…",
   snakemake_running: "Running Snakemake workflow…",
   done: "Complete",

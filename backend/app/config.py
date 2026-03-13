@@ -14,7 +14,6 @@ class Settings(BaseSettings):
     # Backend injection via env vars
     STORAGE_BACKEND: str = "local"       # local | s3
     EC2_BACKEND: str = "mock"            # mock | aws
-    HLA_BACKEND: str = "mock"            # mock | hlahd
     NEXTFLOW_BACKEND: str = "mock"       # mock | local | awsbatch
     NEXTFLOW_PROFILE: str = "docker"     # docker | singularity (local mode only)
     SNAKEMAKE_BACKEND: str = "mock"      # mock | awsbatch

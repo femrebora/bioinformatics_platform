@@ -15,7 +15,6 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { InputFileNode } from "./nodes/InputFileNode";
-import { HLATypingNode } from "./nodes/HLATypingNode";
 import { ResultsNode } from "./nodes/ResultsNode";
 import { FastqToBamNode } from "./nodes/FastqToBamNode";
 import { NfCoreModuleNode } from "./nodes/NfCoreModuleNode";
@@ -217,7 +216,6 @@ function computeLevelLayout(
 const nodeTypes: NodeTypes = {
   inputFile: InputFileNode,
   fastqToBam: FastqToBamNode,
-  hlaTyping: HLATypingNode,
   results: ResultsNode,
   nfcoreModule: NfCoreModuleNode,
   nfcorePipeline: NfCorePipelineNode,
@@ -240,7 +238,6 @@ function makeId(prefix: string) {
  * - NfCorePipelineNode alone → its pipelineId (e.g. "rnaseq")
  * - Only Snakemake nodes → "snakemake"
  * - Only nf-core modules → "nf-core-modules"
- * - HLA-only → null (handled by HLA runner)
  */
 function derivePipelineId(nodes: Node[]): string | null {
   const nfcPipe = nodes.find((n) => n.type === "nfcorePipeline");
@@ -300,43 +297,8 @@ function deriveWorkflowConfig(nodes: Node[]): unknown | null {
   return null;
 }
 
-const DEFAULT_NODES: Node[] = [
-  {
-    id: "input-1",
-    type: "inputFile",
-    position: { x: 100, y: 200 },
-    data: { label: "Input File", fileType: "fastq" },
-  },
-  {
-    id: "hlatyping-1",
-    type: "hlaTyping",
-    position: { x: 370, y: 200 },
-    data: { label: "HLA-HD Typing", tier: "medium" },
-  },
-  {
-    id: "results-1",
-    type: "results",
-    position: { x: 640, y: 200 },
-    data: { label: "Results" },
-  },
-];
-
-const DEFAULT_EDGES: Edge[] = [
-  {
-    id: "e1",
-    source: "input-1",
-    sourceHandle: "file-out",
-    target: "hlatyping-1",
-    targetHandle: "file-in",
-  },
-  {
-    id: "e2",
-    source: "hlatyping-1",
-    sourceHandle: "result-out",
-    target: "results-1",
-    targetHandle: "result-in",
-  },
-];
+const DEFAULT_NODES: Node[] = [];
+const DEFAULT_EDGES: Edge[] = [];
 
 interface PipelineBuilderProps {
   onRunRequested: (
@@ -373,7 +335,7 @@ export function PipelineBuilder({
 }: PipelineBuilderProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState(DEFAULT_NODES);
   const [edges, setEdges, onEdgesChange] = useEdgesState(DEFAULT_EDGES);
-  const [pipelineName, setPipelineName] = useState("My HLA Pipeline");
+  const [pipelineName, setPipelineName] = useState("My Pipeline");
   const [activePipelineId, setActivePipelineId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [spotlightOpen, setSpotlightOpen] = useState(false);
@@ -669,10 +631,10 @@ export function PipelineBuilder({
 
     // Strict rules for built-in-only connections
     const validPairs = [
-      { source: "file-out",   target: "file-in"   }, // Input → HLA (direct)
+      { source: "file-out",   target: "file-in"   }, // Input → node
       { source: "file-out",   target: "fastq-in"  }, // Input → Converter
-      { source: "bam-out",    target: "file-in"   }, // Converter → HLA
-      { source: "result-out", target: "result-in" }, // HLA → Results
+      { source: "bam-out",    target: "file-in"   }, // Converter → node
+      { source: "result-out", target: "result-in" }, // node → Results
     ];
     return validPairs.some((p) => p.source === sh && p.target === th);
   }, []); // stable reference — reads current nodes via nodesRef
@@ -711,8 +673,6 @@ export function PipelineBuilder({
         ? { label: "De Novo Assembly", tool: "spades" }
         : nodeType === "fastqToBam"
         ? { label: "FASTQ → BAM" }
-        : nodeType === "hlaTyping"
-        ? { label: "HLA-HD Typing", tier: "medium" }
         : { label: "Results" };
 
     const prefix =
@@ -734,8 +694,6 @@ export function PipelineBuilder({
         ? "custom"
         : nodeType === "fastqToBam"
         ? "converter"
-        : nodeType === "hlaTyping"
-        ? "hlatyping"
         : "results";
 
     setNodes((nds) => [
@@ -854,17 +812,15 @@ export function PipelineBuilder({
   // Compute pipeline type badge from canvas node types.
   const pipelineType = useMemo(() => {
     const types = new Set(nodes.map((n) => n.type));
-    const hasHla    = types.has("hlaTyping") || types.has("fastqToBam");
     const hasNfc    = types.has("nfcorePipeline") || types.has("nfcoreModule");
     const hasSmk    = types.has("snakemakeWrapper") || types.has("snakemakeWorkflow");
     const hasBs     = types.has("bioScript");
     const hasCustom = types.has("customPipeline");
-    const count = (hasHla ? 1 : 0) + (hasNfc ? 1 : 0) + (hasSmk ? 1 : 0) + (hasBs ? 1 : 0) + (hasCustom ? 1 : 0);
+    const count = (hasNfc ? 1 : 0) + (hasSmk ? 1 : 0) + (hasBs ? 1 : 0) + (hasCustom ? 1 : 0);
     if (count > 1) return "Mixed";
     if (hasBs)     return "BioScript";
     if (hasCustom) return "Custom";
     if (hasSmk)    return "Snakemake";
-    if (hasHla)    return "HLA";
     if (hasNfc)    return "nf-core";
     return "";
   }, [nodes]);

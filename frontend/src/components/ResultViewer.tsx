@@ -1,4 +1,4 @@
-import type { Job, JobResult, HLAAllele, VcfVariant, ResultFile } from "../types/job";
+import type { Job, JobResult, VcfVariant, ResultFile } from "../types/job";
 
 interface Props {
   job: Job;
@@ -8,7 +8,6 @@ interface Props {
 /** Detect the result type when the backend doesn't set the `type` field. */
 function detectType(result: JobResult): string {
   if (result.type) return result.type;
-  if (result.hla_alleles?.length) return "hla_alleles";
   if (result.variants?.length) return "vcf";
   if (result.columns && result.rows) return "table";
   if (result.html) return "html_report";
@@ -18,32 +17,6 @@ function detectType(result: JobResult): string {
 }
 
 // ── Sub-renderers ──────────────────────────────────────────────────────────
-
-function HLATable({ alleles }: { alleles: HLAAllele[] }) {
-  return (
-    <>
-      <h2 style={s.title}>HLA Typing Results</h2>
-      <table style={s.table}>
-        <thead>
-          <tr>
-            <th style={s.th}>Gene</th>
-            <th style={s.th}>Allele 1</th>
-            <th style={s.th}>Allele 2</th>
-          </tr>
-        </thead>
-        <tbody>
-          {alleles.map((row) => (
-            <tr key={row.gene} style={s.tr}>
-              <td style={{ ...s.td, fontWeight: 600 }}>{row.gene}</td>
-              <td style={s.td}><code style={s.mono}>{row.allele_1}</code></td>
-              <td style={s.td}><code style={s.mono}>{row.allele_2}</code></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </>
-  );
-}
 
 function GenericTable({
   columns,
@@ -199,9 +172,7 @@ export function ResultViewer({ job, onReset }: Props) {
 
   return (
     <div style={s.wrapper}>
-      {kind === "hla_alleles" && result.hla_alleles?.length ? (
-        <HLATable alleles={result.hla_alleles} />
-      ) : kind === "table" && result.columns && result.rows ? (
+      {kind === "table" && result.columns && result.rows ? (
         <GenericTable columns={result.columns} rows={result.rows} />
       ) : kind === "vcf" && result.variants ? (
         <VcfTable variants={result.variants} />

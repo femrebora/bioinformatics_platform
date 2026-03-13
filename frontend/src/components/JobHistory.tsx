@@ -127,7 +127,7 @@ export function JobHistory() {
                         )}
                         {job.pipeline_id
                           ? <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "monospace" }}>{job.pipeline_id}</span>
-                          : <span style={{ fontSize: 11, color: "#9ca3af" }}>HLA typing</span>
+                          : <span style={{ fontSize: 11, color: "#9ca3af" }}>unknown pipeline</span>
                         }
                       </div>
                     </td>

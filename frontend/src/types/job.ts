@@ -1,12 +1,6 @@
 export type JobStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
-export type JobStage = "ec2_starting" | "hla_running" | "pipeline_running" | "snakemake_running" | "done" | null;
+export type JobStage = "ec2_starting" | "pipeline_running" | "snakemake_running" | "done" | null;
 export type Tier = "small" | "medium" | "large";
-
-export interface HLAAllele {
-  gene: string;
-  allele_1: string;
-  allele_2: string;
-}
 
 export interface VcfVariant {
   chrom: string;
@@ -37,19 +31,10 @@ export interface Provenance {
   runtime_seconds: number;
 }
 
-/**
- * Flexible result payload. The `type` field is the discriminator.
- * Absent or "hla_alleles" → HLA allele table (legacy + current backend).
- * Other types are placeholders for future pipeline outputs.
- */
 export interface JobResult {
-  /** Absent for legacy HLA results; set by future pipeline runners. */
-  type?: "hla_alleles" | "table" | "vcf" | "html_report" | "text" | "files";
-  /** True when result was produced by a mock runner — show demo data warning. */
+  type?: "table" | "vcf" | "html_report" | "text" | "files";
   _mock?: boolean;
   provenance?: Provenance;
-  // hla_alleles / legacy
-  hla_alleles?: HLAAllele[];
   // table
   columns?: string[];
   rows?: Record<string, string | number>[];

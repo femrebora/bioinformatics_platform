@@ -608,7 +608,7 @@ export function InputFileNode({ id, data }: InputFileNodeProps) {
                   <option value="">Select a completed job…</option>
                   {libJobs.map((j) => (
                     <option key={j.job_id} value={j.job_id}>
-                      {j.pipeline_id ?? "HLA"} · {new Date(j.created_at).toLocaleDateString()}
+                      {j.pipeline_id ?? "unknown"} · {new Date(j.created_at).toLocaleDateString()}
                     </option>
                   ))}
                 </select>

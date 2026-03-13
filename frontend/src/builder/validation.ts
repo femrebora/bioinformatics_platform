@@ -57,9 +57,7 @@ export function validatePipeline(graph: GraphData): ValidationResult {
   const errors: string[] = [];
 
   const inputNodes     = graph.nodes.filter((n) => n.type === "inputFile");
-  const hlaNodes       = graph.nodes.filter((n) => n.type === "hlaTyping");
   const resultsNodes   = graph.nodes.filter((n) => n.type === "results");
-  const converterNodes = graph.nodes.filter((n) => n.type === "fastqToBam");
   const nfModuleNodes  = graph.nodes.filter((n) => n.type === "nfcoreModule");
   const nfPipeNodes    = graph.nodes.filter((n) => n.type === "nfcorePipeline");
   const sampleSheetNodes = graph.nodes.filter((n) => n.type === "sampleSheetBuilder");
@@ -68,7 +66,6 @@ export function validatePipeline(graph: GraphData): ValidationResult {
   const bsNodes        = graph.nodes.filter((n) => n.type === "bioScript");
   const customNodes    = graph.nodes.filter((n) => n.type === "customPipeline");
 
-  const hasHlaParts    = hlaNodes.length > 0 || converterNodes.length > 0;
   const hasNfcoreParts = nfModuleNodes.length > 0 || nfPipeNodes.length > 0 || sampleSheetNodes.length > 0;
   const hasSmkParts    = smkWrappers.length > 0 || smkWorkflows.length > 0;
   const hasBsParts     = bsNodes.length > 0;
@@ -76,76 +73,12 @@ export function validatePipeline(graph: GraphData): ValidationResult {
 
   // ── Empty canvas ────────────────────────────────────────────────────────
   if (graph.nodes.length === 0) {
-    // Disabled with no error message — user hasn't started yet
     return { valid: false, errors: [] };
   }
 
   // ── Only generic nodes, nothing runnable yet ────────────────────────────
-  // e.g. just an InputFileNode or Results node alone — don't show HLA errors
-  if (!hasHlaParts && !hasNfcoreParts && !hasSmkParts && !hasBsParts && !hasCustomParts && resultsNodes.length === 0) {
+  if (!hasNfcoreParts && !hasSmkParts && !hasBsParts && !hasCustomParts && resultsNodes.length === 0) {
     return { valid: false, errors: [] };
-  }
-
-  // ── HLA pipeline rules (only when HLA-HD or converter nodes are present) ─
-  if (hasHlaParts) {
-    if (inputNodes.length !== 1) {
-      errors.push(
-        inputNodes.length === 0
-          ? "Add an Input File node."
-          : "Only one Input File node is allowed."
-      );
-    }
-    if (hlaNodes.length !== 1) {
-      errors.push(
-        hlaNodes.length === 0
-          ? "Add an HLA-HD Typing node."
-          : "Only one HLA-HD Typing node is allowed."
-      );
-    }
-    if (resultsNodes.length > 1) {
-      errors.push("Only one Results node is allowed.");
-    }
-    if (converterNodes.length > 1) {
-      errors.push("Only one FASTQ → BAM converter is allowed.");
-    }
-
-    if (errors.length === 0 && inputNodes.length === 1 && hlaNodes.length === 1) {
-      const inputId = inputNodes[0].id;
-      const hlaId   = hlaNodes[0].id;
-
-      if (converterNodes.length === 1) {
-        const convId = converterNodes[0].id;
-        const hasInputToConv = graph.edges.some(
-          (e) =>
-            e.source === inputId && e.sourceHandle === "file-out" &&
-            e.target === convId  && e.targetHandle === "fastq-in"
-        );
-        if (!hasInputToConv) errors.push("Connect Input File → FASTQ→BAM converter.");
-
-        const hasConvToHla = graph.edges.some(
-          (e) =>
-            e.source === convId && e.sourceHandle === "bam-out" &&
-            e.target === hlaId  && e.targetHandle === "file-in"
-        );
-        if (!hasConvToHla) errors.push("Connect FASTQ→BAM converter → HLA-HD Typing.");
-      } else {
-        const hasInputToHla = graph.edges.some(
-          (e) =>
-            e.source === inputId && e.sourceHandle === "file-out" &&
-            e.target === hlaId   && e.targetHandle === "file-in"
-        );
-        if (!hasInputToHla) errors.push("Connect Input File → HLA-HD Typing.");
-      }
-
-      if (resultsNodes.length === 1) {
-        const hasHlaToResults = graph.edges.some(
-          (e) =>
-            e.source === hlaId           && e.sourceHandle === "result-out" &&
-            e.target === resultsNodes[0].id && e.targetHandle === "result-in"
-        );
-        if (!hasHlaToResults) errors.push("Connect HLA-HD Typing → Results.");
-      }
-    }
   }
 
   // ── Multiple InputFileNodes without a SampleSheet ─────────────────────
@@ -157,7 +90,7 @@ export function validatePipeline(graph: GraphData): ValidationResult {
   }
 
   // ── nf-core rules (permissive — just needs at least one module/pipeline) ─
-  if (hasNfcoreParts && !hasHlaParts && !hasSmkParts) {
+  if (hasNfcoreParts && !hasSmkParts) {
     // Genome must be selected on NfCorePipelineNode
     for (const pipe of nfPipeNodes) {
       const genome = (pipe.data as { genome?: string }).genome ?? "";
@@ -184,7 +117,7 @@ export function validatePipeline(graph: GraphData): ValidationResult {
   }
 
   // ── Snakemake rules (permissive — wrappers/workflows can run standalone) ─
-  if (hasSmkParts && !hasHlaParts) {
+  if (hasSmkParts) {
     // Wrappers/workflows just need at least one node — already guaranteed above
     // If InputFileNode is present, it should be connected to something
     const isMixed = hasNfcoreParts && hasSmkParts;
@@ -201,7 +134,7 @@ export function validatePipeline(graph: GraphData): ValidationResult {
   }
 
   // ── BioScript rules — permissive; just needs the node ────────────────────
-  if (hasBsParts && !hasHlaParts && !hasNfcoreParts && !hasSmkParts) {
+  if (hasBsParts && !hasNfcoreParts && !hasSmkParts) {
     const bsNode = bsNodes[0];
     const script = ((bsNode.data as { script?: string }).script ?? "").trim();
     if (!script) {
@@ -210,7 +143,7 @@ export function validatePipeline(graph: GraphData): ValidationResult {
   }
 
   // ── Custom pipeline rules — permissive; just needs the node ──────────────
-  if (hasCustomParts && !hasHlaParts && !hasNfcoreParts && !hasSmkParts && !hasBsParts) {
+  if (hasCustomParts && !hasNfcoreParts && !hasSmkParts && !hasBsParts) {
     if (inputNodes.length === 0) {
       errors.push("Add an Input File node to provide data to the custom pipeline.");
     }

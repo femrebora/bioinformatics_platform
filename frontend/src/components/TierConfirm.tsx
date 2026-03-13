@@ -35,7 +35,7 @@ export function TierConfirm({ presign, filename, pipelineId, storageKeyR2, workf
   const [payError, setPayError]     = useState<string | null>(null);
   const debounceRef                 = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Only re-estimate when a pipeline is selected — null means HLA/generic,
+  // Only re-estimate when a pipeline is selected — null means generic,
   // which already has the correct presign-based estimate.
   useEffect(() => {
     if (!pipelineId) return;

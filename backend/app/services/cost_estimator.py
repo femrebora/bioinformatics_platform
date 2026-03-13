@@ -105,15 +105,6 @@ PIPELINE_PRICING: dict[str, dict] = {
         "overhead":         1.30,
         "description":      "Custom nf-core module pipeline",
     },
-    # HLA-HD (pipeline_id=None routes here but we expose it explicitly too)
-    "hla": {
-        "instance_type":    "c5.xlarge",
-        "instance_rate":    0.17,
-        "base_hours":       0.25,
-        "per_sample_hours": 0.33,
-        "overhead":         1.25,
-        "description":      "HLA typing (HLA-HD)",
-    },
 }
 
 # ── File-size fallback (unknown or null pipeline) ─────────────────────────
@@ -163,7 +154,7 @@ def estimate(
 
     Args:
         file_size_bytes: Raw input file size (used for fallback only).
-        pipeline_id:     nf-core/Snakemake pipeline key, or None for HLA/unknown.
+        pipeline_id:     nf-core/Snakemake pipeline key, or None for unknown/generic.
         n_samples:       Number of biological samples (biggest cost driver).
     """
     n_samples = max(1, int(n_samples))

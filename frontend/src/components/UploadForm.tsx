@@ -41,7 +41,7 @@ export function UploadForm({ onPresigned }: Props) {
 
   return (
     <div style={styles.wrapper}>
-      <h2 style={styles.title}>HLA Typing Pipeline</h2>
+      <h2 style={styles.title}>Bioinformatics Pipeline</h2>
       <p style={styles.subtitle}>Upload a FASTQ or BAM file to get started.</p>
 
       <div

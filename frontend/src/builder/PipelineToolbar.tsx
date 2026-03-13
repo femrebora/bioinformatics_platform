@@ -44,7 +44,6 @@ export function PipelineToolbar({
   pipelineType,
 }: PipelineToolbarProps) {
   const badgeColors: Record<string, { bg: string; text: string; border: string }> = {
-    "HLA":       { bg: "#dbeafe", text: "#1d4ed8", border: "#bfdbfe" },
     "nf-core":   { bg: "#dcfce7", text: "#15803d", border: "#bbf7d0" },
     "Snakemake": { bg: "#fef3c7", text: "#92400e", border: "#fde68a" },
     "BioScript": { bg: "#f3e8ff", text: "#6d28d9", border: "#e9d5ff" },
