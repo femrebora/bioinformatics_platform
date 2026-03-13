@@ -2,17 +2,12 @@
 Real assessment runner.
 
 Annotation order per variant:
-  1. ClinVar        — pathogenicity + gene + HGVS
-  2. gnomAD         — population AF + popmax AF
-  3. Ensembl VEP    — SIFT, PolyPhen-2, consequence, transcript
-  4. CADD           — phred-scaled pathogenicity score
-  5. MyVariant.info — REVEL, MetaLR, MetaSVM, MutationTaster, GERP++, PhyloP
-  6. SpliceAI       — splice site disruption delta scores
-  7. InterVar       — ACMG/AMP criteria + auto-classification
-  8. CancerHotspots — cancer driver hotspot flag
-  9. dbSNP          — rsID fallback
+  Batch 1 (parallel): ClinVar, gnomAD, Ensembl VEP, CADD, MyVariant.info, SpliceAI, InterVar
+  Batch 2 (sequential, depends on gene/rsid from batch 1):
+    CancerHotspots — needs gene name
+    dbSNP          — only if rsid still missing after batch 1
 
-Gene-level cache (per unique gene):
+Gene-level cache (per unique gene, parallel per new gene):
   10. UniProt   — protein name + function
   11. HGNC      — authoritative gene symbol, locus group, Ensembl/Entrez IDs
   12. ClinGen   — gene-disease validity (Definitive/Strong/Moderate)
@@ -24,7 +19,7 @@ Gene-level cache (per unique gene):
 """
 import logging
 import os
-import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from app.config import settings
@@ -78,6 +73,10 @@ _INTERVAR_BUILD = {
     "gnomad_r2_1": "hg19",
 }
 
+# Maximum number of unique genes held in the per-run gene cache.
+# Evicts oldest entry when exceeded.
+_GENE_CACHE_MAX = 512
+
 
 class RealAssessmentRunner(AssessmentRunner):
     def run(
@@ -86,24 +85,22 @@ class RealAssessmentRunner(AssessmentRunner):
         variants: list[dict],
         workflow_config: dict | None = None,
     ) -> AssessmentResult:
-        genome        = (workflow_config or {}).get("genome", settings.ASSESSMENT_GENOME).lower()
-        gnomad_ds     = _GNOMAD_DATASET.get(genome, "gnomad_r4")
-        vep_assembly  = _VEP_ASSEMBLY.get(genome, "GRCh38")
-        cadd_genome   = _CADD_GENOME.get(gnomad_ds, "GRCh38-v1.7")
-        spliceai_hg   = _SPLICEAI_HG.get(gnomad_ds, "38")
+        genome         = (workflow_config or {}).get("genome", settings.ASSESSMENT_GENOME).lower()
+        gnomad_ds      = _GNOMAD_DATASET.get(genome, "gnomad_r4")
+        vep_assembly   = _VEP_ASSEMBLY.get(genome, "GRCh38")
+        cadd_genome    = _CADD_GENOME.get(gnomad_ds, "GRCh38-v1.7")
+        spliceai_hg    = _SPLICEAI_HG.get(gnomad_ds, "38")
         intervar_build = _INTERVAR_BUILD.get(gnomad_ds, "hg38")
-
-        has_omim     = bool(settings.OMIM_API_KEY)
-        has_orphanet = bool(settings.ORPHANET_API_KEY)
 
         append_log(
             job_id,
             f"Starting annotation of {len(variants)} variant(s) "
-            f"[genome={genome}, gnomAD={gnomad_ds}, OMIM={'yes' if has_omim else 'no key'}, "
-            f"Orphanet={'yes' if has_orphanet else 'no key'}]",
+            f"[genome={genome}, gnomAD={gnomad_ds}, "
+            f"OMIM={'yes' if settings.OMIM_API_KEY else 'no key'}, "
+            f"Orphanet={'yes' if settings.ORPHANET_API_KEY else 'no key'}]",
         )
 
-        # Gene-level cache — lookups are per-gene, not per-variant
+        # Gene-level cache — shared across all variants in this job run.
         _gene_cache: dict[str, dict[str, Any]] = {}
 
         annotated: list[dict] = []
@@ -116,18 +113,33 @@ class RealAssessmentRunner(AssessmentRunner):
             alt   = v.get("alt", "")
             label = f"[{i+1}/{len(variants)}] {chrom}:{pos} {ref}>{alt}"
 
+            append_log(job_id, f"  {label} → ClinVar / gnomAD / VEP / CADD / MyVariant / SpliceAI / InterVar (parallel)")
+
+            # ── Batch 1: 7 independent variant-level queries in parallel ─────────
+            with ThreadPoolExecutor(max_workers=7) as ex:
+                f_cv  = ex.submit(query_clinvar,      chrom, pos, ref, alt)
+                f_gn  = ex.submit(query_gnomad,       chrom, pos, ref, alt, gnomad_ds)
+                f_vep = ex.submit(query_ensembl_vep,  chrom, pos, ref, alt, vep_assembly)
+                f_cad = ex.submit(query_cadd,         chrom, pos, ref, alt, cadd_genome)
+                f_mv  = ex.submit(query_myvariant,    chrom, pos, ref, alt)
+                f_sai = ex.submit(query_spliceai,     chrom, pos, ref, alt, spliceai_hg)
+                f_iv  = ex.submit(query_intervar,     chrom, pos, ref, alt, intervar_build)
+
+            cv  = f_cv.result()
+            gn  = f_gn.result()
+            vep = f_vep.result()
+            cad = f_cad.result()
+            mv  = f_mv.result()
+            sai = f_sai.result()
+            iv  = f_iv.result()
+
             # 1. ClinVar
-            append_log(job_id, f"  {label} → ClinVar")
-            cv = query_clinvar(chrom, pos, ref, alt)
             ann["significance"] = cv.get("significance", "Unknown")
             ann["gene"]         = cv.get("gene", v.get("gene", ""))
             ann["hgvs"]         = cv.get("hgvs", "")
             ann["rsid"]         = cv.get("rsid", v.get("id", "."))
-            time.sleep(0.35)
 
             # 2. gnomAD
-            append_log(job_id, f"  {label} → gnomAD")
-            gn = query_gnomad(chrom, pos, ref, alt, dataset=gnomad_ds)
             if gn.get("af") is not None:
                 ann["af"] = gn["af"]
             if gn.get("af_popmax") is not None:
@@ -139,9 +151,7 @@ class RealAssessmentRunner(AssessmentRunner):
             if not ann.get("hgvs"):
                 ann["hgvs"] = gn.get("hgvsc") or gn.get("hgvsp") or ""
 
-            # 3. Ensembl VEP — SIFT / PolyPhen / consequence
-            append_log(job_id, f"  {label} → Ensembl VEP")
-            vep = query_ensembl_vep(chrom, pos, ref, alt, assembly=vep_assembly)
+            # 3. Ensembl VEP
             ann["sift_score"]     = vep.get("sift_score")
             ann["sift_pred"]      = vep.get("sift_pred", "")
             ann["polyphen_score"] = vep.get("polyphen_score")
@@ -154,14 +164,10 @@ class RealAssessmentRunner(AssessmentRunner):
                 ann["hgvs"] = vep["hgvsc"]
 
             # 4. CADD
-            append_log(job_id, f"  {label} → CADD")
-            cadd = query_cadd(chrom, pos, ref, alt, genome=cadd_genome)
-            ann["cadd_phred"] = cadd.get("cadd_phred")
-            ann["cadd_raw"]   = cadd.get("cadd_raw")
+            ann["cadd_phred"] = cad.get("cadd_phred")
+            ann["cadd_raw"]   = cad.get("cadd_raw")
 
-            # 5. MyVariant.info — REVEL, MetaLR, MetaSVM, MutationTaster, GERP++, PhyloP
-            append_log(job_id, f"  {label} → MyVariant.info")
-            mv = query_myvariant(chrom, pos, ref, alt)
+            # 5. MyVariant.info
             ann["revel"]                 = mv.get("revel")
             ann["metalr"]                = mv.get("metalr")
             ann["metasvm"]               = mv.get("metasvm")
@@ -171,72 +177,56 @@ class RealAssessmentRunner(AssessmentRunner):
             ann["phylop"]                = mv.get("phylop")
 
             # 6. SpliceAI
-            append_log(job_id, f"  {label} → SpliceAI")
-            sai = query_spliceai(chrom, pos, ref, alt, hg=spliceai_hg)
             ann["spliceai_ds_max"] = sai.get("spliceai_ds_max")
             ann["spliceai_ds_ag"]  = sai.get("spliceai_ds_ag")
             ann["spliceai_ds_al"]  = sai.get("spliceai_ds_al")
             ann["spliceai_ds_dg"]  = sai.get("spliceai_ds_dg")
             ann["spliceai_ds_dl"]  = sai.get("spliceai_ds_dl")
 
-            # 7. InterVar — ACMG/AMP
-            append_log(job_id, f"  {label} → InterVar")
-            iv = query_intervar(chrom, pos, ref, alt, build=intervar_build)
+            # 7. InterVar
             ann["intervar_class"] = iv.get("intervar_class", "")
             ann["acmg_criteria"]  = iv.get("acmg_criteria", [])
 
-            # 8. CancerHotspots
+            # ── Batch 2: gene-dependent queries (sequential, cheap) ───────────────
+            # 8. CancerHotspots — needs gene from batch 1
             if ann["gene"]:
                 hs = query_cancer_hotspots(ann["gene"])
                 ann["hotspot"]      = hs.get("is_hotspot", False)
                 ann["hotspot_type"] = hs.get("hotspot_type")
-                time.sleep(0.35)
             else:
                 ann["hotspot"] = False
 
-            # 9. dbSNP — rsID last resort
+            # 9. dbSNP — rsID last resort, only if still missing
             if ann["rsid"] in (".", "", None):
                 snp = query_dbsnp(chrom, pos)
                 ann["rsid"] = snp.get("rsid", ".")
-                time.sleep(0.35)
 
-            # 10-17. Gene-level lookups (cached across variants with the same gene)
+            # ── Gene-level cache (parallel per unique gene) ───────────────────────
             gene = ann.get("gene", "")
             if gene and gene not in _gene_cache:
                 append_log(
                     job_id,
                     f"  gene={gene} → UniProt / HGNC / ClinGen / GenCC / HPO / LOVD"
-                    + (" / OMIM" if has_omim else "")
-                    + (" / Orphanet" if has_orphanet else ""),
+                    + (" / OMIM" if settings.OMIM_API_KEY else "")
+                    + (" / Orphanet" if settings.ORPHANET_API_KEY else ""),
                 )
+                with ThreadPoolExecutor(max_workers=8) as ex:
+                    f_uni    = ex.submit(query_uniprot,  gene)
+                    f_hgnc   = ex.submit(query_hgnc,     gene)
+                    f_clingen = ex.submit(query_clingen, gene)
+                    f_gencc  = ex.submit(query_gencc,    gene)
+                    f_hpo    = ex.submit(query_hpo,      gene)
+                    f_lovd   = ex.submit(query_lovd,     gene)
+                    f_omim   = ex.submit(query_omim,     gene)
+                    f_orpha  = ex.submit(query_orphanet, gene)
+
                 gene_data: dict[str, Any] = {}
+                for f in (f_uni, f_hgnc, f_clingen, f_gencc, f_hpo, f_lovd, f_omim, f_orpha):
+                    gene_data.update(f.result())
 
-                uni = query_uniprot(gene)
-                gene_data.update(uni)
-
-                hgnc = query_hgnc(gene)
-                gene_data.update(hgnc)
-
-                clingen = query_clingen(gene)
-                gene_data.update(clingen)
-
-                gencc = query_gencc(gene)
-                gene_data.update(gencc)
-
-                hpo = query_hpo(gene)
-                gene_data.update(hpo)
-
-                lovd = query_lovd(gene)
-                gene_data.update(lovd)
-
-                if has_omim:
-                    omim = query_omim(gene)
-                    gene_data.update(omim)
-
-                if has_orphanet:
-                    orpha = query_orphanet(gene)
-                    gene_data.update(orpha)
-
+                # Evict oldest entry if cache is at capacity
+                if len(_gene_cache) >= _GENE_CACHE_MAX:
+                    _gene_cache.pop(next(iter(_gene_cache)))
                 _gene_cache[gene] = gene_data
 
             if gene and gene in _gene_cache:

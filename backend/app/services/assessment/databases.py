@@ -26,6 +26,7 @@ All functions tolerate network failures and return empty dicts/defaults on error
 NCBI rate limit without key: 3 req/s — callers must pace requests.
 """
 import logging
+import threading
 import time
 from typing import Any
 
@@ -33,8 +34,23 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-_SESSION = requests.Session()
-_SESSION.headers.update({"User-Agent": "bioplatform-assessment/1.0 (research use)"})
+# Thread-local sessions — each worker thread gets its own requests.Session so
+# concurrent ThreadPoolExecutor calls don't share state across threads.
+_thread_local = threading.local()
+
+
+def _get_session() -> requests.Session:
+    if not hasattr(_thread_local, "session"):
+        s = requests.Session()
+        s.headers.update({"User-Agent": "bioplatform-assessment/1.0 (research use)"})
+        _thread_local.session = s
+    return _thread_local.session
+
+
+def _clean_chrom(chrom: str) -> str:
+    """Strip 'chr'/'Chr' prefix from chromosome identifiers."""
+    return str(chrom).replace("chr", "").replace("Chr", "")
+
 
 NCBI_BASE     = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 GNOMAD_BASE   = "https://gnomad.broadinstitute.org/api"
@@ -70,12 +86,6 @@ HGNC_TIMEOUT              = 10
 GENCC_TIMEOUT             = 12
 ENSEMBL_PHENOTYPE_TIMEOUT = 12
 
-# gnomAD dataset → CADD genome string
-_CADD_GENOME = {
-    "gnomad_r4":   "GRCh38-v1.7",
-    "gnomad_r2_1": "GRCh37-v1.6",
-}
-
 
 # ── ClinVar ────────────────────────────────────────────────────────────────────
 
@@ -85,7 +95,7 @@ def query_clinvar(chrom: str, pos: int | str, ref: str, alt: str) -> dict[str, A
     Uses NCBI E-utilities esearch + esummary.
     """
     try:
-        chrom_clean = str(chrom).replace("chr", "").replace("Chr", "")
+        chrom_clean = _clean_chrom(chrom)
 
         search_url = f"{NCBI_BASE}/esearch.fcgi"
         params: dict[str, Any] = {
@@ -94,20 +104,21 @@ def query_clinvar(chrom: str, pos: int | str, ref: str, alt: str) -> dict[str, A
             "retmode": "json",
             "retmax": "5",
         }
-        r = _SESSION.get(search_url, params=params, timeout=NCBI_TIMEOUT)
+        session = _get_session()
+        r = session.get(search_url, params=params, timeout=NCBI_TIMEOUT)
         r.raise_for_status()
         ids = r.json().get("esearchresult", {}).get("idlist", [])
         if not ids:
             params["term"] = f"{chrom_clean}[chr]+{pos}[chrpos]"
-            r = _SESSION.get(search_url, params=params, timeout=NCBI_TIMEOUT)
+            r = session.get(search_url, params=params, timeout=NCBI_TIMEOUT)
             r.raise_for_status()
             ids = r.json().get("esearchresult", {}).get("idlist", [])
 
         if not ids:
             return {}
 
-        time.sleep(0.35)
-        sr = _SESSION.get(
+        time.sleep(0.35)  # NCBI rate limit: pace between esearch and esummary
+        sr = session.get(
             f"{NCBI_BASE}/esummary.fcgi",
             params={"db": "clinvar", "id": ids[0], "retmode": "json"},
             timeout=NCBI_TIMEOUT,
@@ -150,7 +161,7 @@ def query_gnomad(
     dataset: 'gnomad_r4' (GRCh38) or 'gnomad_r2_1' (GRCh37/hg19).
     """
     try:
-        chrom_clean = str(chrom).replace("chr", "").replace("Chr", "")
+        chrom_clean = _clean_chrom(chrom)
         variant_id = f"{chrom_clean}-{pos}-{ref}-{alt}"
 
         query = """
@@ -165,7 +176,7 @@ def query_gnomad(
           }
         }
         """
-        r = _SESSION.post(
+        r = _get_session().post(
             GNOMAD_BASE,
             json={"query": query, "variables": {"variantId": variant_id, "dataset": dataset}},
             timeout=GNOMAD_TIMEOUT,
@@ -213,12 +224,12 @@ def query_ensembl_vep(
     assembly: 'GRCh38' (default) or 'GRCh37'.
     """
     try:
-        chrom_clean = str(chrom).replace("chr", "").replace("Chr", "")
+        chrom_clean = _clean_chrom(chrom)
         # VEP region format: "{chr} {pos} . {ref} {alt} . . ."
         variant_str = f"{chrom_clean} {pos} . {ref} {alt} . . ."
 
         base = VEP_BASE if assembly == "GRCh38" else "https://grch37.rest.ensembl.org"
-        r = _SESSION.post(
+        r = _get_session().post(
             f"{base}/vep/human/region",
             json={"variants": [variant_str]},
             headers={"Content-Type": "application/json", "Accept": "application/json"},
@@ -269,9 +280,9 @@ def query_cadd(
     CADD phred ≥ 20 → top 1% most deleterious; ≥ 30 → top 0.1%.
     """
     try:
-        chrom_clean = str(chrom).replace("chr", "").replace("Chr", "")
+        chrom_clean = _clean_chrom(chrom)
         url = f"{CADD_BASE}/{genome}/{chrom_clean}_{pos}_{ref}_{alt}"
-        r = _SESSION.get(url, timeout=CADD_TIMEOUT)
+        r = _get_session().get(url, timeout=CADD_TIMEOUT)
         r.raise_for_status()
 
         # Response is TSV with comment header lines starting with '#'
@@ -300,7 +311,7 @@ def query_cancer_hotspots(gene: str) -> dict[str, Any]:
     if not gene:
         return {"is_hotspot": False}
     try:
-        r = _SESSION.get(
+        r = _get_session().get(
             f"{HOTSPOTS_BASE}/hotspots/single",
             params={"hugoSymbol": gene},
             timeout=NCBI_TIMEOUT,
@@ -321,8 +332,8 @@ def query_cancer_hotspots(gene: str) -> dict[str, Any]:
 def query_dbsnp(chrom: str, pos: int | str) -> dict[str, Any]:
     """Return {rsid} from dbSNP by chromosome position."""
     try:
-        chrom_clean = str(chrom).replace("chr", "").replace("Chr", "")
-        r = _SESSION.get(
+        chrom_clean = _clean_chrom(chrom)
+        r = _get_session().get(
             f"{NCBI_BASE}/esearch.fcgi",
             params={
                 "db": "snp",
@@ -350,7 +361,7 @@ def query_uniprot(gene: str) -> dict[str, Any]:
     if not gene:
         return {}
     try:
-        r = _SESSION.get(
+        r = _get_session().get(
             f"{UNIPROT_BASE}/search",
             params={
                 "query":  f"gene:{gene} AND organism_id:9606 AND reviewed:true",
@@ -405,13 +416,11 @@ def query_omim(gene: str) -> dict[str, Any]:
     Returns {} silently if no key is configured.
     """
     from app.config import settings
-    if not settings.OMIM_API_KEY:
-        return {}
-    if not gene:
+    if not settings.OMIM_API_KEY or not gene:
         return {}
     try:
         # Search gene → MIM number
-        r = _SESSION.get(
+        r = _get_session().get(
             f"{OMIM_BASE}/entry/search",
             params={
                 "search":      f"gene:{gene}",
@@ -462,12 +471,10 @@ def query_orphanet(gene: str) -> dict[str, Any]:
     Returns {} silently if no key is configured.
     """
     from app.config import settings
-    if not settings.ORPHANET_API_KEY:
-        return {}
-    if not gene:
+    if not settings.ORPHANET_API_KEY or not gene:
         return {}
     try:
-        r = _SESSION.get(
+        r = _get_session().get(
             f"{ORPHANET_BASE}/Gene/genesymbol/{gene}/Disease",
             headers={
                 "apiKey":  settings.ORPHANET_API_KEY,
@@ -502,11 +509,11 @@ def query_myvariant(chrom: str, pos: int | str, ref: str, alt: str) -> dict[str,
     Aggregates dbNSFP scores including REVEL, MetaLR, MetaSVM, MutationTaster, GERP++, PhyloP.
     """
     try:
-        chrom_clean = str(chrom).replace("chr", "").replace("Chr", "")
+        chrom_clean = _clean_chrom(chrom)
         # HGVS ID for SNVs: chrN:g.POSREF>ALT
         hgvs_id = f"chr{chrom_clean}:g.{pos}{ref}>{alt}"
         fields = "dbnsfp.revel,dbnsfp.metalr,dbnsfp.metasvm,dbnsfp.mutationtaster,cadd.gerp,cadd.phylop"
-        r = _SESSION.get(
+        r = _get_session().get(
             f"{MYVARIANT_BASE}/variant/{hgvs_id}",
             params={"fields": fields},
             timeout=MYVARIANT_TIMEOUT,
@@ -571,9 +578,9 @@ def query_spliceai(chrom: str, pos: int | str, ref: str, alt: str, hg: str = "38
     spliceai_ds_max >= 0.2 is considered a meaningful splice effect.
     """
     try:
-        chrom_clean = str(chrom).replace("chr", "").replace("Chr", "")
+        chrom_clean = _clean_chrom(chrom)
         variant = f"chr{chrom_clean}-{pos}-{ref}-{alt}"
-        r = _SESSION.get(
+        r = _get_session().get(
             f"{SPLICEAI_BASE}/spliceai/",
             params={"hg": hg, "variant": variant},
             timeout=SPLICEAI_TIMEOUT,
@@ -610,8 +617,8 @@ def query_intervar(chrom: str, pos: int | str, ref: str, alt: str, build: str = 
     acmg_criteria: list of met criteria e.g. ['PM2', 'PP3']
     """
     try:
-        chrom_clean = str(chrom).replace("chr", "").replace("Chr", "")
-        r = _SESSION.get(
+        chrom_clean = _clean_chrom(chrom)
+        r = _get_session().get(
             f"{INTERVAR_BASE}/api2.php",
             params={
                 "queryType": "position",
@@ -660,7 +667,7 @@ def query_clingen(gene: str) -> dict[str, Any]:
     if not gene:
         return {}
     try:
-        r = _SESSION.get(
+        r = _get_session().get(
             f"{CLINGEN_EREPO_BASE}/classifications",
             params={"gene_symbol": gene, "limit": 10},
             headers={"Accept": "application/json"},
@@ -706,7 +713,7 @@ def query_lovd(gene: str) -> dict[str, Any]:
     if not gene:
         return {}
     try:
-        r = _SESSION.get(
+        r = _get_session().get(
             f"{LOVD_BASE}/variants/{gene}",
             params={"format": "application/json", "limit": "0"},
             headers={"Accept": "application/json"},
@@ -742,7 +749,7 @@ def query_hgnc(gene: str) -> dict[str, Any]:
     if not gene:
         return {}
     try:
-        r = _SESSION.get(
+        r = _get_session().get(
             f"{HGNC_BASE}/fetch/symbol/{gene}",
             headers={"Accept": "application/json"},
             timeout=HGNC_TIMEOUT,
@@ -776,7 +783,7 @@ def query_gencc(gene: str) -> dict[str, Any]:
     if not gene:
         return {}
     try:
-        r = _SESSION.get(
+        r = _get_session().get(
             f"{GENCC_BASE}/classifications-search",
             params={"gene_symbol": gene},
             headers={"Accept": "application/json"},
@@ -810,7 +817,7 @@ def query_hpo(gene: str) -> dict[str, Any]:
     if not gene:
         return {}
     try:
-        r = _SESSION.get(
+        r = _get_session().get(
             f"{VEP_BASE}/phenotype/gene/homo_sapiens/{gene}",
             params={"include_associated": "1"},
             headers={"Accept": "application/json"},
