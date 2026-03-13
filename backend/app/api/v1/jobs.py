@@ -13,6 +13,7 @@ from app.limiter import limiter
 from app.models.job import Job
 from app.models.user import User
 from app.schemas.job import JobCreate, JobResponse, JobListResponse
+from app.services.audit import log_audit, _ip, _ua
 from app.tasks.pipeline import run_pipeline
 
 _CANCELLABLE_STATUSES = {"pending", "running"}
@@ -103,6 +104,9 @@ async def create_job(
     job.celery_task_id = task.id
     await db.commit()
 
+    await log_audit("job.create", user_id=current_user.id, resource_type="job", resource_id=job.id,
+                    ip_address=_ip(request), user_agent=_ua(request),
+                    meta={"pipeline_id": job.pipeline_id, "tier": job.tier})
     return _serialize_job(job)
 
 
@@ -283,6 +287,8 @@ async def retry_job(
     new_job.celery_task_id = task.id
     await db.commit()
 
+    await log_audit("job.retry", user_id=current_user.id, resource_type="job", resource_id=new_job.id,
+                    meta={"original_job_id": job_id, "pipeline_id": new_job.pipeline_id})
     return _serialize_job(new_job)
 
 
@@ -327,3 +333,5 @@ async def cancel_job(
     job.stage = None
     job.updated_at = datetime.now(timezone.utc)
     await db.commit()
+    await log_audit("job.cancel", user_id=current_user.id, resource_type="job", resource_id=job_id,
+                    meta={"pipeline_id": job.pipeline_id})

@@ -27,3 +27,22 @@ async def get_current_user(
     if user is None or not user.is_active:
         raise exc
     return user
+
+
+def require_role(*roles: str):
+    """Dependency factory that enforces one of the given roles.
+
+    Usage::
+
+        @router.delete("/admin/user/{id}")
+        async def admin_delete(current_user: User = Depends(require_role("admin"))):
+            ...
+    """
+    async def _check(current_user: User = Depends(get_current_user)) -> User:
+        if current_user.role not in roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Requires role: {' or '.join(roles)}.",
+            )
+        return current_user
+    return _check

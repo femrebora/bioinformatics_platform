@@ -17,6 +17,7 @@ Gene-level cache (per unique gene, parallel per new gene):
   16. OMIM      — gene-disease + inheritance (optional, needs API key)
   17. Orphanet  — rare disease associations (optional, needs API key)
 """
+import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -77,6 +78,33 @@ _INTERVAR_BUILD = {
 # Evicts oldest entry when exceeded.
 _GENE_CACHE_MAX = 512
 
+# Redis variant annotation cache — 7 days TTL.
+# Caches the merged result of all 7 parallel API calls per variant+genome.
+_VARIANT_CACHE_TTL = 7 * 24 * 3600
+
+
+def _variant_cache_key(chrom: str, pos: Any, ref: str, alt: str, gnomad_ds: str) -> str:
+    return f"variant_ann:{chrom}:{pos}:{ref}>{alt}:{gnomad_ds}"
+
+
+def _get_cached_annotation(key: str) -> dict | None:
+    try:
+        import redis as _redis
+        val = _redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True).get(key)
+        return json.loads(val) if val else None
+    except Exception:
+        return None
+
+
+def _set_cached_annotation(key: str, data: dict) -> None:
+    try:
+        import redis as _redis
+        _redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True).setex(
+            key, _VARIANT_CACHE_TTL, json.dumps(data)
+        )
+    except Exception:
+        pass
+
 
 class RealAssessmentRunner(AssessmentRunner):
     def run(
@@ -113,25 +141,40 @@ class RealAssessmentRunner(AssessmentRunner):
             alt   = v.get("alt", "")
             label = f"[{i+1}/{len(variants)}] {chrom}:{pos} {ref}>{alt}"
 
-            append_log(job_id, f"  {label} → ClinVar / gnomAD / VEP / CADD / MyVariant / SpliceAI / InterVar (parallel)")
+            cache_key = _variant_cache_key(chrom, pos, ref, alt, gnomad_ds)
+            cached = _get_cached_annotation(cache_key)
 
-            # ── Batch 1: 7 independent variant-level queries in parallel ─────────
-            with ThreadPoolExecutor(max_workers=7) as ex:
-                f_cv  = ex.submit(query_clinvar,      chrom, pos, ref, alt)
-                f_gn  = ex.submit(query_gnomad,       chrom, pos, ref, alt, gnomad_ds)
-                f_vep = ex.submit(query_ensembl_vep,  chrom, pos, ref, alt, vep_assembly)
-                f_cad = ex.submit(query_cadd,         chrom, pos, ref, alt, cadd_genome)
-                f_mv  = ex.submit(query_myvariant,    chrom, pos, ref, alt)
-                f_sai = ex.submit(query_spliceai,     chrom, pos, ref, alt, spliceai_hg)
-                f_iv  = ex.submit(query_intervar,     chrom, pos, ref, alt, intervar_build)
+            if cached:
+                append_log(job_id, f"  {label} → cache hit")
+                cv  = cached.get("cv",  {})
+                gn  = cached.get("gn",  {})
+                vep = cached.get("vep", {})
+                cad = cached.get("cad", {})
+                mv  = cached.get("mv",  {})
+                sai = cached.get("sai", {})
+                iv  = cached.get("iv",  {})
+            else:
+                append_log(job_id, f"  {label} → ClinVar / gnomAD / VEP / CADD / MyVariant / SpliceAI / InterVar (parallel)")
 
-            cv  = f_cv.result()
-            gn  = f_gn.result()
-            vep = f_vep.result()
-            cad = f_cad.result()
-            mv  = f_mv.result()
-            sai = f_sai.result()
-            iv  = f_iv.result()
+                # ── Batch 1: 7 independent variant-level queries in parallel ─────────
+                with ThreadPoolExecutor(max_workers=7) as ex:
+                    f_cv  = ex.submit(query_clinvar,      chrom, pos, ref, alt)
+                    f_gn  = ex.submit(query_gnomad,       chrom, pos, ref, alt, gnomad_ds)
+                    f_vep = ex.submit(query_ensembl_vep,  chrom, pos, ref, alt, vep_assembly)
+                    f_cad = ex.submit(query_cadd,         chrom, pos, ref, alt, cadd_genome)
+                    f_mv  = ex.submit(query_myvariant,    chrom, pos, ref, alt)
+                    f_sai = ex.submit(query_spliceai,     chrom, pos, ref, alt, spliceai_hg)
+                    f_iv  = ex.submit(query_intervar,     chrom, pos, ref, alt, intervar_build)
+
+                cv  = f_cv.result()
+                gn  = f_gn.result()
+                vep = f_vep.result()
+                cad = f_cad.result()
+                mv  = f_mv.result()
+                sai = f_sai.result()
+                iv  = f_iv.result()
+                _set_cached_annotation(cache_key, {"cv": cv, "gn": gn, "vep": vep,
+                                                    "cad": cad, "mv": mv, "sai": sai, "iv": iv})
 
             # 1. ClinVar
             ann["significance"] = cv.get("significance", "Unknown")

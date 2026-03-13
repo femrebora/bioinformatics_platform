@@ -2,13 +2,15 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from sqlalchemy import text
 
 from app.api.v1.router import router
 from app.config import settings
-from app.database import engine, Base
+from app.database import engine, Base, AsyncSessionLocal
 from app.limiter import limiter
 
 
@@ -69,4 +71,26 @@ app.include_router(router)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    """Deep health check: verify DB connectivity and Redis availability."""
+    db_ok = False
+    redis_ok = False
+
+    try:
+        async with AsyncSessionLocal() as s:
+            await s.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        pass
+
+    try:
+        import redis as _redis
+        _redis.from_url(settings.CELERY_BROKER_URL).ping()
+        redis_ok = True
+    except Exception:
+        pass
+
+    ok = db_ok and redis_ok
+    return JSONResponse(
+        {"status": "ok" if ok else "degraded", "db": db_ok, "redis": redis_ok},
+        status_code=200 if ok else 503,
+    )

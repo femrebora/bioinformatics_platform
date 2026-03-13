@@ -11,6 +11,7 @@ from app.api.v1.deps import get_current_user
 from app.database import get_db
 from app.limiter import limiter
 from app.models.user import User
+from app.services.audit import log_audit, _ip, _ua
 from app.services.auth import create_access_token, hash_password, verify_password
 
 router = APIRouter()
@@ -26,6 +27,7 @@ class RegisterRequest(BaseModel):
 class UserOut(BaseModel):
     id: str
     email: str
+    role: str
     created_at: datetime
     model_config = {"from_attributes": True}
 
@@ -58,6 +60,8 @@ async def register(request: Request, body: RegisterRequest, db: AsyncSession = D
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    await log_audit("auth.register", user_id=user.id, resource_type="user", resource_id=user.id,
+                    ip_address=_ip(request), user_agent=_ua(request))
     return user
 
 
@@ -73,11 +77,15 @@ async def login(
     )
     user = result.scalar_one_or_none()
     if not user or not verify_password(form.password, user.hashed_password):
+        await log_audit("auth.login_failed", ip_address=_ip(request), user_agent=_ua(request),
+                        meta={"email": form.username.lower().strip()})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    await log_audit("auth.login", user_id=user.id, resource_type="user", resource_id=user.id,
+                    ip_address=_ip(request), user_agent=_ua(request))
     return TokenOut(access_token=create_access_token(user.id))
 
 
